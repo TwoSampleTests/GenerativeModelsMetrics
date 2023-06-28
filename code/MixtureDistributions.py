@@ -1,8 +1,8 @@
 import os
-import sklearn
+import sklearn # type: ignore
 import numpy as np
-import pandas as pd
-from matplotlib import pyplot as plt
+import pandas as pd # type: ignore
+from matplotlib import pyplot as plt # type: ignore
 import tensorflow as tf
 import tensorflow_probability as tfp
 import numpy as np
@@ -67,8 +67,8 @@ def MixNormal1(n_components: int = 3,
     return mix_gauss
     
 def MixNormal2(n_components: int = 3,
-                n_dimensions: int = 4,
-                seed: int = 0) -> tfp.distributions.Mixture:
+               n_dimensions: int = 4,
+               seed: int = 0) -> tfp.distributions.Mixture:
     """
     Defines a mixture of 'n_components' Normal distributions in 'n_dimensions' dimensions 
     with means and stddevs given by the tensors 'loc' and 'scale' with shapes 
