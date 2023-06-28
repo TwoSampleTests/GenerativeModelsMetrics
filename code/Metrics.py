@@ -13,21 +13,22 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 import numpy as np
-tfd = tfp.distributions
 from scipy import stats
 from scipy.stats import wasserstein_distance
 from scipy.stats import epps_singleton_2samp
 from scipy.stats import anderson_ksamp
 from statistics import mean,median
+from typing import List, Tuple, Dict, Callable, Union, Optional
 
-def correlation_from_covariance(covariance):
-    """Computes the correlation matrix from the covariance matrix.
-
+def correlation_from_covariance(covariance: np.ndarray) -> np.ndarray:
+    """
+    Function that computes the correlation matrix from the covariance matrix.
+    
     Args:
-        covariance (array): Covariance matrix
-
+        covariance: np.ndarray, covariance matrix.
+        
     Returns:
-        _type_: array
+        np.ndarray, correlation matrix.
     """
     v = np.sqrt(np.diag(covariance))
     outer_v = np.outer(v, v)
@@ -35,74 +36,97 @@ def correlation_from_covariance(covariance):
     correlation[covariance == 0] = 0
     return correlation
 
-def KL_divergence(target_test_data,nf_dist,test_log_prob):
-    """Computes the KL divergence between the target distribution and the NF distribution.
 
-    Args:
-        target_test_data (_type_): _description_
-        nf_dist (_type_): _description_
-        test_log_prob (_type_): _description_
+def input_dist_dimensions(dist: Union[np.ndarray, tfp.distributions.Distribution]
+                         ) -> Tuple[int, Optional[int]]:
+    if isinstance(dist, np.ndarray):
+        if len(dist.shape) != 2:
+            raise ValueError("Input must be a 2-dimensional numpy array")
+        else:
+            nsamples, ndims = dist.shape
+    elif isinstance(dist, tfp.distributions.Distribution):
+        nsamples, ndims = None, dist.sample(2).numpy().shape[1]
+    else:
+        raise ValueError("Input must be either a numpy array or a tfp.distributions.Distribution object")
+    return ndims, nsamples
 
-    Returns:
-        _type_: _description_
-    """
-    p_density=nf_dist.log_prob(target_test_data)
-    KL_estimate = np.mean(test_log_prob - p_density)
-    return KL_estimate
 
-def KS_test_1(dist_1,dist_2,n_iter=10,batch_size=100000):
+def KS_test_1(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
+              dist_2: Union[np.ndarray, tfp.distributions.Distribution],
+              n_iter: int = 10,
+              batch_size: int = 100000
+             ) -> Tuple[List[float], List[float]]:
     """
     The Kolmogorov-Smirnov test is a non-parametric test that compares two distributions and returns a p-value that indicates whether the two distributions are the same or not. 
-    The test is performed for each dimension of the distributions and for n_iter times and the mean and std of the p-values are returned.
-    In the case of numerical distributions, data are split in n_iter batches dist_1_j, dist_2_j of size batch_size=int(nsamples/n_iter) and the mean and std are computed over all pairs of batches dist_1_j, dist_2_j.
+    The test is performed for each dimension of the distributions and for n_iter times and lists of ks_test_statistic and ks_pvalues are returned.
+    There are three cases:
+        1. Both distributions are symbolic (tfp.distributions.Distribution). In this case, batch_size (input value) points dist_1_j, dist_2_j are sampled at each iteration.
+        2. Both distributions are numerical (np.ndarray). In this case, if distributions have different number of samples, then the minimum number of samples is used. 
+           Data are then split in n_iter batches dist_1_j, dist_2_j of size batch_size = int(nsamples/n_iter).
+        3. One distribution is symbolic and the other is numerical. In this case, batch_size is set to int(nsamples/n_iter) of the numerical distribution. Data are then split in n_iter batches dist_1_j, dist_2_j, one taken from the numerical
+           distribution and the other sampled from the symbolic one.
+    The ks_test_statistic and ks_pvalue are then computed over all pairs of batches dist_1_j, dist_2_j for all dimensions and the (2D) lists are returned.   
+    
     Args:
-        dist_1 (numpy array or distribution): The first distribution to be compared
-        dist_2 (numpy array or distribution): The second distribution to be compared
-        n_iter (int, optional): Number of iterations to be performed. Defaults to 10.
-        batch_size (int, optional): Number of samples to be used in each iteration. Only used if num is true. Defaults to 100000.
+        dist_1: np.ndarray or tfp.distributions.Distribution, the first distribution to be compared.
+        dist_2: np.ndarray or tfp.distributions.Distribution, the second distribution to be compared.
+        n_iter: int, number of iterations to be performed. Defaults to 10.
+        batch_size: int, number of samples to be used in each iteration. Only used for numerical distributions. Defaults to 100000.
+        
     Returns:
-        [float,float]: Mean and std of the p-values obtained from the KS tests
+        ks_metric_list, ks_pvalue_list: Tuble[List[float], List[float]], list of ks_metric and ks_pvalue for each dimension and each iteration.
     """    
-    # If an array of the input is an array, then the input batch_size is ignored and batch_size is set to nsamples/n_iter
-    if isinstance(dist_1, np.ndarray):
-        ndims=dist_1.shape[1]
-        nsamples=dist_1.shape[0]
-        batch_size=int(nsamples/n_iter)
-    elif isinstance(dist_2, np.ndarray):
-        ndims=dist_2.shape[1]
-        nsamples=dist_2.shape[0]
-        batch_size=int(nsamples/n_iter)
-    else:
-        ndims=dist_1.sample(2).numpy().shape[1]
+    # 
+    ndims_1, nsamples_1 = input_dist_dimensions(dist_1)
+    ndims_2, nsamples_2 = input_dist_dimensions(dist_2)
+    if ndims_1 != ndims_2:
+        raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
+    ndims = ndims_1
+    nsamples: Optional[int] = None
+    if nsamples_1 is not None and nsamples_2 is not None:
+        nsamples = min(nsamples_1, nsamples_2)
+    elif nsamples_1 is not None:
+        nsamples = nsamples_1
+    elif nsamples_2 is not None:
+        nsamples = nsamples_2
+    if nsamples is not None:
+        if isinstance(dist_1, np.ndarray):
+            dist_1 = dist_1[:nsamples,:]
+        if isinstance(dist_2, np.ndarray):
+            dist_2 = dist_2[:nsamples,:]
+        batch_size = nsamples // n_iter
+    
     # Define ks_list that will contain the list of ks for all dimensions and all iterations
-    ks_list=[]
+    ks_metric_list: List[float] = []
+    ks_pvalue_list: List[float] = []
+    
     # Loop over all iterations
     for k in range(n_iter):
-        # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
+        # For both distributions if the distribution is numerical (np.ndarray), then samples are split in n_iter batches of size batch_size = nsamples/n_iter,
+        # otherwise, if the distribution is symbolic (tfp.distributions.Distribution), then batch_size points are sampled at each iteration. In the latter case,
+        # batch_size could be the input value, if both distributions are symbolic, or nsamples/n_iter if any is numerical.
         if isinstance(dist_1, np.ndarray):
-            dist_1_k=dist_1[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
-            dist_1_k=dist_1.sample(batch_size).numpy()
-        else:   
-            raise ValueError("dist_1 must be either a numpy array or a distribution")
+            dist_1_k = dist_1[k*batch_size:(k+1)*batch_size,:]
+        elif isinstance(dist_1, tfp.distributions.Distribution):
+            dist_1_k = dist_1.sample(batch_size).numpy()
         if isinstance(dist_2, np.ndarray):
             dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_2, tfd.distribution.Distribution):
+        elif isinstance(dist_2, tfp.distributions.Distribution):
             dist_2_k=dist_2.sample(batch_size).numpy()
-        else:   
-            raise ValueError("dist_1 must be either a numpy array or a distribution")
         # The ks test is computed and the p-value saved for each dimension
         for dim in range(ndims):
-            p_val=stats.ks_2samp(dist_1_k[:,dim], dist_2_k[:,dim])[1]
-            ks_list.append(p_val)
-    # Compute the mean and std of the p-values
-    ks_mean = np.mean(ks_list)
-    ks_std = np.std(ks_list)
+            metric, p_val = stats.ks_2samp(dist_1_k[:,dim], dist_2_k[:,dim])
+            ks_metric_list.append(metric)
+            ks_pvalue_list.append(p_val)
     # Return the mean and std of the p-values
-    return [ks_mean,ks_std,ks_list]
+    return ks_metric_list, ks_pvalue_list
 
 
-def KS_test_2(dist_1,dist_2,n_iter=100,batch_size=100000):
+def KS_test_2(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
+              dist_2: Union[np.ndarray, tfp.distributions.Distribution],
+              n_iter: int = 10,
+              batch_size: int = 100000
+             ) -> Tuple[List[float], List[float]]:
     """
     The Kolmogorov-Smirnov test is a non-parametric test that compares two distributions and returns a p-value that indicates whether the two distributions are the same or not. 
     The test is performed for each dimension of the distributions and for n_iter times and the mean and std of the p-values are returned.
@@ -134,14 +158,14 @@ def KS_test_2(dist_1,dist_2,n_iter=100,batch_size=100000):
         # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
         if isinstance(dist_1, np.ndarray):
             dist_1_j=dist_1[j*batch_size:(j+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
+        elif isinstance(dist_1, tfp.distributions.Distribution):
             dist_1_j=dist_1.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
         for k in range(n_iter):
             if isinstance(dist_2, np.ndarray):
                 dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-            elif isinstance(dist_2, tfd.distribution.Distribution):
+            elif isinstance(dist_2, tfp.distributions.Distribution):
                 dist_2_k=dist_2.sample(batch_size).numpy()
             else:   
                 raise ValueError("dist_1 must be either a numpy array or a distribution")
@@ -187,13 +211,13 @@ def AD_test_1(dist_1,dist_2,n_iter=10,batch_size=100000):
         # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
         if isinstance(dist_1, np.ndarray):
             dist_1_k=dist_1[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
+        elif isinstance(dist_1, tfp.distributions.Distribution):
             dist_1_k=dist_1.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
         if isinstance(dist_2, np.ndarray):
             dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_2, tfd.distribution.Distribution):
+        elif isinstance(dist_2, tfp.distributions.Distribution):
             dist_2_k=dist_2.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
@@ -240,14 +264,14 @@ def AD_test_2(dist_1,dist_2,n_iter=100,batch_size=100000):
         # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
         if isinstance(dist_1, np.ndarray):
             dist_1_j=dist_1[j*batch_size:(j+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
+        elif isinstance(dist_1, tfp.distributions.Distribution):
             dist_1_j=dist_1.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
         for k in range(n_iter):
             if isinstance(dist_2, np.ndarray):
                 dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-            elif isinstance(dist_2, tfd.distribution.Distribution):
+            elif isinstance(dist_2, tfp.distributions.Distribution):
                 dist_2_k=dist_2.sample(batch_size).numpy()
             else:   
                 raise ValueError("dist_1 must be either a numpy array or a distribution")
@@ -293,13 +317,13 @@ def FN_1(dist_1,dist_2,n_iter=10,batch_size=100000):
         # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
         if isinstance(dist_1, np.ndarray):
             dist_1_k=dist_1[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
+        elif isinstance(dist_1, tfp.distributions.Distribution):
             dist_1_k=dist_1.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
         if isinstance(dist_2, np.ndarray):
             dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_2, tfd.distribution.Distribution):
+        elif isinstance(dist_2, tfp.distributions.Distribution):
             dist_2_k=dist_2.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
@@ -350,14 +374,14 @@ def FN_2(dist_1,dist_2,n_iter=100,batch_size=100000):
         # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
         if isinstance(dist_1, np.ndarray):
             dist_1_j=dist_1[j*batch_size:(j+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
+        elif isinstance(dist_1, tfp.distributions.Distribution):
             dist_1_j=dist_1.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
         for k in range(n_iter):
             if isinstance(dist_2, np.ndarray):
                 dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-            elif isinstance(dist_2, tfd.distribution.Distribution):
+            elif isinstance(dist_2, tfp.distributions.Distribution):
                 dist_2_k=dist_2.sample(batch_size).numpy()
             else:   
                 raise ValueError("dist_1 must be either a numpy array or a distribution")
@@ -408,13 +432,13 @@ def WD_1(dist_1,dist_2,n_iter=10,batch_size=100000):
         # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
         if isinstance(dist_1, np.ndarray):
             dist_1_k=dist_1[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
+        elif isinstance(dist_1, tfp.distributions.Distribution):
             dist_1_k=dist_1.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
         if isinstance(dist_2, np.ndarray):
             dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_2, tfd.distribution.Distribution):
+        elif isinstance(dist_2, tfp.distributions.Distribution):
             dist_2_k=dist_2.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
@@ -462,14 +486,14 @@ def WD_2(dist_1,dist_2,n_iter=100,batch_size=100000):
         # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
         if isinstance(dist_1, np.ndarray):
             dist_1_j=dist_1[j*batch_size:(j+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
+        elif isinstance(dist_1, tfp.distributions.Distribution):
             dist_1_j=dist_1.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
         for k in range(n_iter):
             if isinstance(dist_2, np.ndarray):
                 dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-            elif isinstance(dist_2, tfd.distribution.Distribution):
+            elif isinstance(dist_2, tfp.distributions.Distribution):
                 dist_2_k=dist_2.sample(batch_size).numpy()
             else:   
                 raise ValueError("dist_1 must be either a numpy array or a distribution")
@@ -524,13 +548,13 @@ def SWD_1(dist_1,dist_2,n_iter=10,batch_size=100000,n_slices=100,seed=None):
         # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
         if isinstance(dist_1, np.ndarray):
             dist_1_k=dist_1[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
+        elif isinstance(dist_1, tfp.distributions.Distribution):
             dist_1_k=dist_1.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
         if isinstance(dist_2, np.ndarray):
             dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-        elif isinstance(dist_2, tfd.distribution.Distribution):
+        elif isinstance(dist_2, tfp.distributions.Distribution):
             dist_2_k=dist_2.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
@@ -588,14 +612,14 @@ def SWD_2(dist_1,dist_2,n_iter=100,batch_size=100000,n_slices=100,seed=None):
         # If num is true, then the samples are split in n_iter batches of size nsamples/n_iter, otherwise we just sample batch_size points from the distributions
         if isinstance(dist_1, np.ndarray):
             dist_1_j=dist_1[j*batch_size:(j+1)*batch_size,:]
-        elif isinstance(dist_1, tfd.distribution.Distribution):
+        elif isinstance(dist_1, tfp.distributions.Distribution):
             dist_1_j=dist_1.sample(batch_size).numpy()
         else:   
             raise ValueError("dist_1 must be either a numpy array or a distribution")
         for k in range(n_iter):
             if isinstance(dist_2, np.ndarray):
                 dist_2_k=dist_2[k*batch_size:(k+1)*batch_size,:]
-            elif isinstance(dist_2, tfd.distribution.Distribution):
+            elif isinstance(dist_2, tfp.distributions.Distribution):
                 dist_2_k=dist_2.sample(batch_size).numpy()
             else:   
                 raise ValueError("dist_1 must be either a numpy array or a distribution")
