@@ -1,7 +1,7 @@
 # GenerativeModelsMetrics
 Metrics and 2-sample tests for evaluation of Generative Models
 
-Overleaf: https://www.overleaf.com/project/649be84f19993a613609065f
+Overleaf: https://www.overleaf.com/6325513872wjspjxbhzsyf
 
 code folder contains two files: 
 
