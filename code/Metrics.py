@@ -205,7 +205,6 @@ def KS_test_2(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
             [metric, pvalue] = np.mean([ks_2samp(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
             metric_list.append(metric)
             pvalue_list.append(pvalue)
-    metric_list = np.mean(np.array(metric_list), axis=1).tolist()
     return metric_list, pvalue_list
 
 def AD_test_1(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
@@ -278,10 +277,11 @@ def AD_test_1(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
             dist_2_k: np.ndarray = dist_2[k*batch_size:(k+1)*batch_size,:]
         elif isinstance(dist_2, tfp.distributions.Distribution):
             dist_2_k = dist_2.sample(batch_size).numpy()
-        [metric, pvalue] = np.mean([anderson_ksamp(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+        test = [anderson_ksamp([dist_1_k[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
+        metric = np.array([p[0] for p in test]).mean()
+        pvalue = np.array([p[2] for p in test]).mean()
         metric_list.append(metric)
         pvalue_list.append(pvalue)
-    metric_list = np.mean(np.array(metric_list), axis=1).tolist()
     return metric_list, pvalue_list
 
 def AD_test_2(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
@@ -357,10 +357,11 @@ def AD_test_2(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
                 dist_2_k: np.ndarray = dist_2[k*batch_size:(k+1)*batch_size,:]
             elif isinstance(dist_2, tfp.distributions.Distribution):
                 dist_2_k = dist_2.sample(batch_size).numpy()
-            [metric, pvalue] = np.mean([anderson_ksamp(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+            test = [anderson_ksamp([dist_1_j[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
+            metric = np.array([p[0] for p in test]).mean()
+            pvalue = np.array([p[2] for p in test]).mean()
             metric_list.append(metric)
             pvalue_list.append(pvalue)
-    metric_list = np.mean(np.array(metric_list), axis=1).tolist()
     return metric_list, pvalue_list
 
 def FN_1(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
@@ -534,10 +535,10 @@ def WD_1(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
            distribution and the other one sampled from the symbolic one.
     The wd_mean_list is then computed over all pairs of batches dist_1_j, dist_2_j and the lists are returned.
     
-    NOTE: The functions AD_test_1 and AD_test_2 differ in the way batches are computed and compared. For instance, for niter=10 and nsamples=100000, AD_test_1 generates 10 pairs of independent batches 
-    of 10000 samples each and performs the tests pairwise (total of 10 tests with 10000 points), while AD_test_2 generates int(np.ceil(np.sqrt(niter)))=3 pairs of independent batches of int(100000/3)
-    samples each and performs the tests for all pairs combinations (9 tests with int(100000/3) points). So the number of tests is always (almost) equal to niter, but AD_test_1 performs independent 
-    tests with less points, while AD_test_2 performs non-independent tests with more points.
+    NOTE: The functions WD_1 and WD_2 differ in the way batches are computed and compared. For instance, for niter=10 and nsamples=100000, WD_1 generates 10 pairs of independent batches 
+    of 10000 samples each and performs the tests pairwise (total of 10 tests with 10000 points), while WD_2 generates int(np.ceil(np.sqrt(niter)))=3 pairs of independent batches of int(100000/3)
+    samples each and performs the tests for all pairs combinations (9 tests with int(100000/3) points). So the number of tests is always (almost) equal to niter, but WD_1 performs independent 
+    tests with less points, while WD_2 performs non-independent tests with more points.
     
     Args:
         dist_1: np.ndarray or tfp.distributions.Distribution, the first distribution to be compared.
@@ -605,10 +606,10 @@ def WD_2(dist_1: Union[np.ndarray, tfp.distributions.Distribution],
            distribution and the other one sampled from the symbolic one.
     The wd_mean_list is then computed over all pairs of batches dist_1_j, dist_2_j and the lists are returned.
     
-    NOTE: The functions AD_test_1 and AD_test_2 differ in the way batches are computed and compared. For instance, for niter=10 and nsamples=100000, AD_test_1 generates 10 pairs of independent batches 
-    of 10000 samples each and performs the tests pairwise (total of 10 tests with 10000 points), while AD_test_2 generates int(np.ceil(np.sqrt(niter)))=3 pairs of independent batches of int(100000/3)
-    samples each and performs the tests for all pairs combinations (9 tests with int(100000/3) points). So the number of tests is always (almost) equal to niter, but AD_test_1 performs independent 
-    tests with less points, while AD_test_2 performs non-independent tests with more points.
+    NOTE: The functions WD_1 and WD_2 differ in the way batches are computed and compared. For instance, for niter=10 and nsamples=100000, WD_1 generates 10 pairs of independent batches 
+    of 10000 samples each and performs the tests pairwise (total of 10 tests with 10000 points), while WD_2 generates int(np.ceil(np.sqrt(niter)))=3 pairs of independent batches of int(100000/3)
+    samples each and performs the tests for all pairs combinations (9 tests with int(100000/3) points). So the number of tests is always (almost) equal to niter, but WD_1 performs independent 
+    tests with less points, while WD_2 performs non-independent tests with more points.
     
     Args:
         dist_1: np.ndarray or tfp.distributions.Distribution, the first distribution to be compared.
