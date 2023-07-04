@@ -1,11 +1,9 @@
-
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Sat Jul 13 12:36:34 2019
+Updated June 2023
 
-@author: reyes-gonzalez
+@author: Riccardo Torre (riccardo.torre@ge.infn.it)
 """
 from sklearn import datasets # type: ignore
 from sklearn.preprocessing import StandardScaler # type: ignore
