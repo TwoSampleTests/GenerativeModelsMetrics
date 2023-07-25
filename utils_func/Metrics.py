@@ -8,13 +8,35 @@ Updated June 2023
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
-import numpy as np
+import traceback
+from timeit import default_timer as timer
+from tqdm import tqdm # type: ignore
 from scipy import stats # type: ignore
-from scipy.stats import ks_2samp # Need a tf version
-from scipy.stats import anderson_ksamp # Need a tf version
-from scipy.stats import wasserstein_distance # Need a tf version
+from scipy.stats import ks_2samp # type: ignore # Need a tf version
+from scipy.stats import anderson_ksamp # type: ignore # Need a tf version
+from scipy.stats import wasserstein_distance # type: ignore # Need a tf version
 from statistics import mean,median
 from typing import List, Tuple, Dict, Callable, Union, Optional
+
+def ks_2samp_wrapper(dist_1, dist_2):
+    return ks_2samp(dist_1, dist_2)
+
+def anderson_ksamp_wrapper(dist_1, dist_2):
+    return anderson_ksamp(dist_1, dist_2)
+
+def wasserstein_distance_wrapper(dist_1, dist_2):
+    return wasserstein_distance(dist_1, dist_2)
+    
+    
+def __get_best_dtype(dtype1, dtype2):
+    dtype1_precision = tf.as_dtype(dtype1).min
+    dtype2_precision = tf.as_dtype(dtype2).min
+    return tf.cond(dtype1_precision > dtype2_precision, lambda: dtype1, lambda: dtype2)
+
+@tf.function
+def conditional_tf_print(string: str,
+                         verbose: bool = False) -> None:
+    tf.cond(tf.equal(verbose, True), lambda: tf.print(string), lambda: tf.constant(verbose))
 
 def correlation_from_covariance_np(covariance: np.ndarray) -> np.ndarray:
     """
@@ -48,32 +70,90 @@ def correlation_from_covariance_tf(covariance: tf.Tensor) -> tf.Tensor:
     return correlation
 
 
-def parse_input_dist(dist_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor]
-                    ) -> Tuple[Optional[tfp.distributions.Distribution], tf.Tensor, int, Optional[int]]:
+def __parse_input_dist(dist_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
+                     verbose: bool = False
+                    ) -> Tuple[Optional[tfp.distributions.Distribution], tf.Tensor, int, Optional[int], tf.DType]:
     dist_symb: tfp.distributions.Distribution
     dist_num: tf.Tensor
     nsamples: Optional[int]
     ndims: int
+    is_symb: bool
+    if verbose:
+        print("Parsing input distribution...")
     if isinstance(dist_input, (np.ndarray, tf.Tensor)):
+        if verbose:
+            print("Input distribution is a numberic numpy array or tf.Tensor")
         if len(dist_input.shape) != 2:
             raise ValueError("Input must be a 2-dimensional numpy array or a tfp.distributions.Distribution object")
         else:
             dist_symb = None
             dist_num = tf.convert_to_tensor(dist_input)
             nsamples, ndims = dist_num.shape
+            is_symb = False
     elif isinstance(dist_input, tfp.distributions.Distribution):
+        if verbose:
+            print("Input distribution is a tfp.distributions.Distribution object")
         dist_symb = dist_input
-        dist_num = tf.convert_to_tensor([])
+        dist_num = tf.convert_to_tensor([[]],dtype=dist_symb.dtype)
         nsamples, ndims = None, dist_symb.sample(2).numpy().shape[1]
+        is_symb = True
     else:
         raise ValueError("Input must be either a numpy array or a tfp.distributions.Distribution object")
-    return dist_symb, dist_num, ndims, nsamples
+    return is_symb, dist_symb, dist_num, ndims, nsamples
+
+
+def __parse_input_dist_tf(dist_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
+                        verbose: bool = False
+                       ) -> Tuple[tf.Tensor, Optional[tfp.distributions.Distribution], tf.Tensor, int, Optional[int]]:
+    
+    def is_ndarray_or_tensor():
+        return tf.reduce_any([isinstance(dist_input, np.ndarray), tf.is_tensor(dist_input)])
+    
+    def is_distribution():
+        return tf.reduce_all([
+            tf.logical_not(is_ndarray_or_tensor()),
+            tf.reduce_any([isinstance(dist_input, tfp.distributions.Distribution)])
+        ])
+
+    def handle_distribution():
+        conditional_tf_print(string = "Input distribution is a tfp.distributions.Distribution object", verbose = verbose)
+        dist_symb: tf.distributions.Distribution = dist_input
+        dist_num = tf.convert_to_tensor([[]],dtype=dist_symb.dtype)
+        nsamples, ndims = tf.constant(0), tf.shape(dist_symb.sample(2))[1]
+        return tf.constant(True), dist_symb, dist_num, ndims, nsamples
+
+    def handle_ndarray_or_tensor():
+        conditional_tf_print(string = "Input distribution is a numeric numpy array or tf.Tensor", verbose = verbose)
+        if tf.rank(dist_input) != 2:
+            tf.debugging.assert_equal(tf.rank(dist_input), 2, "Input must be a 2-dimensional numpy array or a tfp.distributions.Distribution object")
+        dist_symb = None
+        dist_num = tf.convert_to_tensor(dist_input)
+        nsamples, ndims = tf.unstack(tf.shape(dist_num))
+        return tf.constant(False), dist_symb, dist_num, ndims, nsamples
+
+    def handle_else():
+        tf.debugging.assert_equal(
+            tf.reduce_any([is_distribution(), is_ndarray_or_tensor()]),
+            True,
+            "Input must be either a numpy array or a tfp.distributions.Distribution object"
+        )
+
+    conditional_tf_print(string = "Parsing input distribution...", verbose = verbose)
+
+    return tf.case([
+        (is_distribution(), handle_distribution),
+        (is_ndarray_or_tensor(), handle_ndarray_or_tensor)
+    ], default=handle_else, exclusive=True)
 
 
 def KS_test_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     niter: int = 10,
-                    batch_size: int = 100000
+                    batch_size: int = 100000,
+                    dtype_input: Optional[tf.DType] = None,
+                    use_tf: bool = False,
+                    verbose: bool = False,
+                    progress_bar: bool = False
                    ) -> Tuple[List[float], List[float]]:
     """
     The Kolmogorov-Smirnov test is a non-parametric test that compares two distributions and returns a test statistic and a p-value (the test statistic distribution is known a-priori) 
@@ -111,15 +191,26 @@ def KS_test_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     metric_list: np.ndarray = np.zeros(niter)
     pvalue_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
     ndims: int = ndims_1
+    
+    if dtype_input is not None:
+        dtype = dtype_input
+    else:
+        dtype = __get_best_dtype(dtype_1, dtype_2)
     
     if nsamples_1 is not None and nsamples_2 is not None:
         nsamples = min(nsamples_1, nsamples_2)
@@ -129,39 +220,66 @@ def KS_test_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
         nsamples = nsamples_2
     if nsamples is not None:
         if dist_1_symb is None:
-            dist_1_num = dist_1_num[:nsamples,:]
+            dist_1_num = tf.cast(dist_1_num[:nsamples,:], dtype = dtype)
         if dist_2_symb is None:
-            dist_2_num = dist_2_num[:nsamples,:]
+            dist_2_num = tf.cast(dist_2_num[:nsamples,:], dtype = dtype)
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting KS tests calculation...")
+        start: float = timer()
     
     if dist_1_symb is None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
             dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             [metric_list[k], pvalue_list[k]] = np.mean([ks_2samp(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
-            dist_2_k = dist_2_symb.sample(batch_size)
+            dist_2_k = tf.cast(dist_2_symb.sample(batch_size), dtype = dtype)
             [metric_list[k], pvalue_list[k]] = np.mean([ks_2samp(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for k in range(niter):
-            dist_1_k = dist_1_symb.sample(batch_size) # type: ignore
+            dist_1_k = tf.cast(dist_1_symb.sample(batch_size), dtype = dtype)
             dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             [metric_list[k], pvalue_list[k]] = np.mean([ks_2samp(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for k in range(niter):
-            dist_1_k = dist_1_symb.sample(batch_size) # type: ignore
-            dist_2_k = dist_2_symb.sample(batch_size) # type: ignore
+            dist_1_k = tf.cast(dist_1_symb.sample(batch_size), dtype = dtype)
+            dist_2_k = tf.cast(dist_2_symb.sample(batch_size), dtype = dtype)
             [metric_list[k], pvalue_list[k]] = np.mean([ks_2samp(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
-
+            if pbar:
+                pbar.update(1)
+                
+    if verbose:
+        end: float = timer()
+        print("KS tests calculation completed in {:.2f} seconds".format(end-start))
+                
     return metric_list.tolist(), pvalue_list.tolist()
 
 
 def KS_test_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     niter: int = 10,
-                    batch_size: int = 100000
+                    batch_size: int = 100000,
+                    dtype_input: Optional[tf.DType] = None,
+                    use_tf: bool = False,
+                    verbose: bool = False,
+                    progress_bar: bool = False
                    ) -> Tuple[List[float], List[float]]:
     """
     The Kolmogorov-Smirnov test is a non-parametric test that compares two distributions and returns a test statistic and a p-value (the test statistic distribution is known a-priori) 
@@ -199,15 +317,26 @@ def KS_test_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     metric_list: np.ndarray = np.zeros(niter)
     pvalue_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
     ndims: int = ndims_1
+    
+    if dtype_input is not None:
+        dtype = dtype_input
+    else:
+        dtype = __get_best_dtype(dtype_1, dtype_2)
     
     if nsamples_1 is not None and nsamples_2 is not None:
         nsamples = min(nsamples_1, nsamples_2)
@@ -216,44 +345,228 @@ def KS_test_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     elif nsamples_2 is not None:
         nsamples = nsamples_2
     if dist_1_symb is None:
-        dist_1_num = dist_1_num[:nsamples,:]
+        dist_1_num = tf.cast(dist_1_num[:nsamples,:], dtype = dtype)
     else:
-        dist_1_num = dist_1_symb.sample(batch_size*niter)
+        dist_1_num = tf.cast(dist_1_symb.sample(batch_size*niter), dtype = dtype)
     if dist_2_symb is None:
-        dist_2_num = dist_2_num[:nsamples,:]
+        dist_2_num = tf.cast(dist_2_num[:nsamples,:], dtype = dtype)
     else:
-        dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+        dist_2_num = tf.cast(dist_2_symb.sample(batch_size*niter), dtype = dtype)
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if use_tf:
+        ks_func = ks_2samp_tf
+    else:
+        ks_func = ks_2samp
+        
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total=niter, desc="Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting KS tests calculation...")
+        start: float = timer()
     
     for k in range(niter):
         dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
         dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
-        [metric_list[k], pvalue_list[k]] = np.mean([ks_2samp(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
-
+        [metric_list[k], pvalue_list[k]] = np.mean([ks_func(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+        if pbar:
+            pbar.update(1)
+            
+    if verbose:
+        end: float = timer()
+        print("KS tests calculation completed in {:.2f} seconds".format(end-start))
+                
     return metric_list.tolist(), pvalue_list.tolist()
+
+
+def KS_test_1_small_tf(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
+                       dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
+                       niter: int = 10,
+                       batch_size: int = 100000,
+                       dtype_input: tf.DType = tf.float32,
+                       use_tf: bool = False,
+                       verbose: bool = False,
+                       progress_bar: bool = False
+                      ) -> tf.Tensor:
+    dist_1_symb: tfp.distributions.Distribution
+    dist_2_symb: tfp.distributions.Distribution
+    dist_1_num: tf.Tensor
+    dist_2_num: tf.Tensor
+    ndims: int
+    ndims_1: int
+    ndims_2: int
+    nsamples_1: Optional[int]
+    nsamples_2: Optional[int]
+    nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
+    pbar: Optional[tqdm]
+    start: float
+    end: float
+    metric_list: np.ndarray = np.zeros(niter)
+    pvalue_list: np.ndarray = np.zeros(niter)
+    
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist_tf(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist_tf(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
+    
+    # Utility functions
+    def set_ndims(value: int) -> None:
+        nonlocal ndims
+        ndims = value
+        
+    def raise_ndims_error() -> None:
+        tf.debugging.assert_equal(ndims_1, ndims_2, message="dist_1 and dist_2 must have the same number of dimensions")
+    
+    def set_nsamples(value: int) -> None:
+        nonlocal nsamples
+        nsamples = value
+        
+    def set_dist_num_from_symb(dist: tfp.distributions.Distribution) -> tf.Tensor:
+        nonlocal dtype
+        dist_num = tf.cast(dist.sample(batch_size*niter), dtype=dtype)
+        return dist_num
+    
+    def raise_batch_size_error() -> None:
+        tf.debugging.assert_greater(nsamples, niter, message="nsamples must be greater than niter when at least one distribution is numerical")
+    
+    def set_batch_size(input: int) -> None:
+        nonlocal batch_size
+        batch_size = input
+        tf.cond(tf.equal(batch_size, 0), true_fn = lambda: raise_batch_size_error(), false_fn = lambda: None)
+        
+    def start_calculation() -> None:
+        nonlocal start, verbose
+        conditional_tf_print(string = "Starting KS tests calculation...", verbose = verbose)
+        start = timer()
+        
+    def init_progress_bar(niter: int) -> None:
+        nonlocal pbar
+        pbar = tqdm(total=niter, desc="Iterations")
+        
+    def update_progress_bar() -> None:
+        nonlocal pbar
+        pbar.update(1)
+        
+    def end_calculation() -> None:
+        nonlocal end, verbose
+        end = timer()
+        conditional_tf_print(string = "KS tests calculation completed in "+str(end-start)+" seconds", verbose = verbose)
+        
+    # Check and set ndims
+    tf.cond(tf.equal(ndims_1, ndims_2), true_fn = lambda: set_ndims(ndims_1), false_fn = lambda: raise_ndims_error())
+    
+    # Check and set dtype
+    dtype = __get_best_dtype(dtype_input,__get_best_dtype(dtype_1, dtype_2))
+    
+    # Check and set nsamples
+    tf.cond(tf.not_equal(nsamples_1, tf.constant(0)),
+            true_fn = lambda: tf.cond(tf.not_equal(nsamples_2, tf.constant(0)),
+                                       true_fn = lambda: set_nsamples(min(nsamples_1, nsamples_2)),
+                                       false_fn = lambda: set_nsamples(nsamples_1)),
+            false_fn = lambda: tf.cond(tf.not_equal(nsamples_2, tf.constant(0)),
+                                       true_fn = lambda: set_nsamples(nsamples_2),
+                                       false_fn = lambda: set_nsamples(tf.constant(0))))
+
+    # Check and set distributions
+    dist_1_num = tf.cond(tf.logical_not(is_symb_1),
+                         true_fn = lambda: tf.cast(dist_1_num[:nsamples, :], dtype=dtype),
+                         false_fn = lambda: set_dist_num_from_symb(dist_1_symb))
+    dist_2_num = tf.cond(tf.logical_not(is_symb_2),
+                         true_fn = lambda: tf.cast(dist_2_num[:nsamples, :], dtype=dtype),
+                         false_fn = lambda: set_dist_num_from_symb(dist_2_symb))
+
+    tf.cond(tf.less(nsamples, tf.constant(batch_size * niter)),
+            true_fn = lambda: set_batch_size(nsamples // niter), # type: ignore
+            false_fn = lambda: None)
+               
+    tf.cond(tf.equal(verbose, True), true_fn = lambda: start_calculation(), false_fn = lambda: None)
+    tf.cond(tf.equal(progress_bar, True), true_fn = lambda: init_progress_bar(niter), false_fn = lambda: None)
+        
+    res = tf.TensorArray(dtype, size=niter)
+        
+    def body(k, res):
+        dist_1_k = dist_1_num[k * batch_size:(k + 1) * batch_size, :]
+        dist_2_k = dist_2_num[k * batch_size:(k + 1) * batch_size, :]
+ 
+        ks_tests = tf.TensorArray(dtype, size=ndims)
+        ks_pvalues = tf.TensorArray(dtype, size=ndims)
+ 
+        def loop_body(dim, ks_tests, ks_pvalues):
+            ks_result, ks_pvalue = tf.numpy_function(ks_2samp_wrapper, 
+                                                     [dist_1_k[:, dim], dist_2_k[:, dim]], 
+                                                     [dtype, dtype])
+            ks_result = tf.cast(ks_result, dtype)
+            ks_pvalue = tf.cast(ks_pvalue, dtype)
+            ks_tests = ks_tests.write(dim, ks_result)
+            ks_pvalues = ks_pvalues.write(dim, ks_pvalue)
+            return dim + 1, ks_tests, ks_pvalues
+ 
+        _, ks_tests, ks_pvalues = tf.while_loop(lambda dim, ks_tests, ks_pvalues: dim < ndims,
+                                                loop_body,
+                                                [0, ks_tests, ks_pvalues])
+ 
+        mean_ks_tests_batch = tf.cast(tf.reduce_mean(ks_tests.stack()), dtype)
+        mean_ks_pvalues_batch = tf.cast(tf.reduce_mean(ks_pvalues.stack()), dtype)
+        res = res.write(k, tf.stack([mean_ks_tests_batch, mean_ks_pvalues_batch], axis=0))
+ 
+        tf.cond(tf.equal(progress_bar, True), true_fn = lambda: update_progress_bar(), false_fn = lambda: None)
+ 
+        return k + 1, res
+ 
+    _, result = tf.while_loop(lambda k, res: k < niter, body, [0, res])
+    
+    tf.cond(tf.equal(progress_bar, True), true_fn = lambda: pbar.close(), false_fn = lambda: None)
+    tf.cond(tf.equal(verbose, True), true_fn = lambda: end_calculation(), false_fn = lambda: None)
+    
+    return result.stack()
 
 
 def KS_test_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
               dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
               niter: int = 10,
-              batch_size: int = 100000
+              batch_size: int = 100000,
+              dtype_input: Optional[tf.DType] = None,
+              use_tf: bool = False,
+              verbose: bool = False,
+              progress_bar: bool = False
              ) -> Tuple[List[float], List[float]]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return KS_test_1_small(dist_1_input, dist_2_input, niter, batch_size)
-        except:
-            return KS_test_1_large(dist_1_input, dist_2_input, niter, batch_size)
+            if verbose:
+                print("Total number of tests ",nn," < 1e8. Using the fastest KS_test_1_small.")
+            return KS_test_1_small(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
+        except Exception as e:
+            print("Caught an exception in KS_test_1_small. Details:")
+            traceback.print_exc()
+            if verbose:
+                print("Failed to use KS_test_1_small. Using KS_test_1_large.")
+            return KS_test_1_large(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
     else:
-        return KS_test_1_large(dist_1_input, dist_2_input, niter, batch_size)
+        if verbose:
+            print("Total number of tests ",nn," >= 1e8. Using KS_test_1_large.")
+        return KS_test_1_large(dist_1_input, dist_2_input, niter, batch_size, use_tf, verbose, progress_bar)
     
 
 def KS_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     niter: int = 10,
-                    batch_size: int = 100000
+                    batch_size: int = 100000,
+                    dtype_input: Optional[tf.DType] = None,
+                    use_tf: bool = False,
+                    verbose: bool = False,
+                    progress_bar: bool = False
                    ) -> Tuple[List[float], List[float]]:
     """
     The Kolmogorov-Smirnov test is a non-parametric test that compares two distributions and returns a test statistic and a p-value (the test statistic distribution is known a-priori) 
@@ -291,17 +604,28 @@ def KS_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     metric_list: np.ndarray = np.zeros(niter)
     pvalue_list: np.ndarray = np.zeros(niter)
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
     ndims: int = ndims_1
+    
+    if dtype_input is not None:
+        dtype = dtype_input
+    else:
+        dtype = __get_best_dtype(dtype_1, dtype_2)
     
     if nsamples_1 is not None and nsamples_2 is not None:
         nsamples = min(nsamples_1, nsamples_2)
@@ -311,10 +635,26 @@ def KS_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
         nsamples = nsamples_2
     if nsamples is not None:
         if dist_1_symb is None:
-            dist_1_num = dist_1_num[:nsamples,:]
+            dist_1_num = tf.cast(dist_1_num[:nsamples,:], dtype = dtype)
         if dist_2_symb is None:
-            dist_2_num = dist_2_num[:nsamples,:]
+            dist_2_num = tf.cast(dist_2_num[:nsamples,:], dtype = dtype)
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if use_tf:
+        ks_func = ks_2samp_tf
+    else:
+        ks_func = ks_2samp
+        
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting KS tests calculation...")
+        start: float = timer()
     
     l: int = 0
     if dist_1_symb is None and dist_2_symb is None:
@@ -322,29 +662,41 @@ def KS_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
             dist_1_j: tf.Tensor = dist_1_num[j*batch_size:(j+1)*batch_size,:]
             for k in range(niter):
                 dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
-                [metric_list[l], pvalue_list[l]] = np.mean([ks_2samp(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+                [metric_list[l], pvalue_list[l]] = np.mean([ks_func(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_num[j*batch_size:(j+1)*batch_size,:]
             for k in range(niter):
-                dist_2_k = dist_2_symb.sample(batch_size)
-                [metric_list[l], pvalue_list[l]] = np.mean([ks_2samp(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+                dist_2_k = tf.cast(dist_2_symb.sample(batch_size), dtype = dtype)
+                [metric_list[l], pvalue_list[l]] = np.mean([ks_func(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for j in range(niter):
-            dist_1_j = dist_1_symb.sample(batch_size)
+            dist_1_j = tf.cast(dist_1_symb.sample(batch_size), dtype = dtype)
             for k in range(niter):
                 dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]    
-                [metric_list[l], pvalue_list[l]] = np.mean([ks_2samp(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+                [metric_list[l], pvalue_list[l]] = np.mean([ks_func(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for j in range(niter):
-            dist_1_j = dist_1_symb.sample(batch_size)
+            dist_1_j = tf.cast(dist_1_symb.sample(batch_size), dtype = dtype)
             for k in range(niter):
-                dist_2_k = dist_2_symb.sample(batch_size)
-                [metric_list[l], pvalue_list[l]] = np.mean([ks_2samp(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+                dist_2_k = tf.cast(dist_2_symb.sample(batch_size), dtype = dtype)
+                [metric_list[l], pvalue_list[l]] = np.mean([ks_func(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
                 l += 1
+                if pbar:
+                    pbar.update(1)
+                    
+    if verbose:
+        end: float = timer()
+        print("KS tests calculation completed in {:.2f} seconds".format(end-start))
 
     return metric_list.tolist(), pvalue_list.tolist()
 
@@ -352,7 +704,11 @@ def KS_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
 def KS_test_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     niter: int = 10,
-                    batch_size: int = 100000
+                    batch_size: int = 100000,
+                    dtype_input: Optional[tf.DType] = None,
+                    use_tf: bool = False,
+                    verbose: bool = False,
+                    progress_bar: bool = False
                    ) -> Tuple[List[float], List[float]]:
     """
     The Kolmogorov-Smirnov test is a non-parametric test that compares two distributions and returns a test statistic and a p-value (the test statistic distribution is known a-priori) 
@@ -390,17 +746,28 @@ def KS_test_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     metric_list: np.ndarray = np.zeros(niter)
     pvalue_list: np.ndarray = np.zeros(niter)
-    
+        
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
     ndims: int = ndims_1
+    
+    if dtype_input is not None:
+        dtype = dtype_input
+    else:
+        dtype = __get_best_dtype(dtype_1, dtype_2)
     
     if nsamples_1 is not None and nsamples_2 is not None:
         nsamples = min(nsamples_1, nsamples_2)
@@ -409,23 +776,45 @@ def KS_test_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     elif nsamples_2 is not None:
         nsamples = nsamples_2
     if dist_1_symb is None:
-        dist_1_num = dist_1_num[:nsamples,:]
+        dist_1_num = tf.cast(dist_1_num[:nsamples,:], dtype = dtype)
     else:
-        dist_1_num = dist_1_symb.sample(batch_size*niter)
+        dist_1_num = tf.cast(dist_1_symb.sample(batch_size*niter), dtype = dtype)
     if dist_2_symb is None:
-        dist_2_num = dist_2_num[:nsamples,:]
+        dist_2_num = tf.cast(dist_2_num[:nsamples,:], dtype = dtype)
     else:
-        dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+        dist_2_num = tf.cast(dist_2_symb.sample(batch_size*niter), dtype = dtype)
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if use_tf:
+        ks_func = ks_2samp_tf
+    else:
+        ks_func = ks_2samp
+        
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting KS tests calculation...")
+        start: float = timer()
     
     l: int = 0
     for j in range(niter):
         dist_1_j: tf.Tensor = dist_1_num[j*batch_size:(j+1)*batch_size,:]
         for k in range(niter):
             dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
-            [metric_list[l], pvalue_list[l]] = np.mean([ks_2samp(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
+            [metric_list[l], pvalue_list[l]] = np.mean([ks_func(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)],axis=0).tolist()
             l += 1
+            if pbar:
+                pbar.update(1)
+                
+    if verbose:
+        end: float = timer()
+        print("KS tests calculation completed in {:.2f} seconds".format(end-start))
             
     return metric_list.tolist(), pvalue_list.tolist()
 
@@ -433,23 +822,37 @@ def KS_test_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
 def KS_test_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
               dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
               niter: int = 10,
-              batch_size: int = 100000
+              batch_size: int = 100000,
+              dtype_input: Optional[tf.DType] = None,
+              use_tf: bool = False,
+              verbose: bool = False,
+              progress_bar: bool = False
              ) -> Tuple[List[float], List[float]]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return KS_test_2_small(dist_1_input, dist_2_input, niter, batch_size)
-        except:
-            return KS_test_2_large(dist_1_input, dist_2_input, niter, batch_size)
+            if verbose:
+                print("Total number of tests ",nn," < 1e8. Using the fastest KS_test_2_small.")
+            return KS_test_2_small(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
+        except Exception as e:
+            print("Caught an exception in KS_test_2_small. Details:")
+            traceback.print_exc()
+            if verbose:
+                print("Failed to use KS_test_2_small. Using KS_test_2_large.")
+            return KS_test_2_large(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
     else:
-        return KS_test_2_large(dist_1_input, dist_2_input, niter, batch_size)
+        if verbose:
+            print("Total number of tests ",nn," >= 1e8. Using KS_test_2_large.")
+        return KS_test_2_large(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
     
 
 def AD_test_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     niter: int = 10,
-                    batch_size: int = 100000
+                    batch_size: int = 100000,
+                    verbose: bool = False,
+                    progress_bar: bool = False
                    ) -> Tuple[List[float], List[float]]:
     """
     The Anderson-Darling test is a non-parametric test that compares two distributions and returns a test statistic and a p-value (the test statistic distribution is known a-priori) 
@@ -487,11 +890,17 @@ def AD_test_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     metric_list: np.ndarray = np.zeros(niter)
     pvalue_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -509,31 +918,54 @@ def AD_test_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting AD tests calculation...")
+        start: float = timer()
+    
     if dist_1_symb is None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
             dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             test = [anderson_ksamp([dist_1_k[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
             [metric_list[k], pvalue_list[k]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
             dist_2_k = dist_2_symb.sample(batch_size)
             test = [anderson_ksamp([dist_1_k[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
             [metric_list[k], pvalue_list[k]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
             dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             test = [anderson_ksamp([dist_1_k[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
             [metric_list[k], pvalue_list[k]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
             dist_2_k = dist_2_symb.sample(batch_size)
             test = [anderson_ksamp([dist_1_k[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
             [metric_list[k], pvalue_list[k]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
+            if pbar:
+                pbar.update(1)
+    
+    if verbose:
+        end: float = timer()
+        print("AD tests calculation completed in {:.2f} seconds".format(end-start))
 
     return metric_list.tolist(), pvalue_list.tolist()
 
@@ -541,7 +973,9 @@ def AD_test_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
 def AD_test_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     niter: int = 10,
-                    batch_size: int = 100000
+                    batch_size: int = 100000,
+                    verbose: bool = False,
+                    progress_bar: bool = False
                    ) -> Tuple[List[float], List[float]]:
     """
     The Anderson-Darling test is a non-parametric test that compares two distributions and returns a test statistic and a p-value (the test statistic distribution is known a-priori) 
@@ -579,11 +1013,17 @@ def AD_test_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     metric_list: np.ndarray = np.zeros(niter)
     pvalue_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -603,14 +1043,31 @@ def AD_test_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting AD tests calculation...")
+        start: float = timer()
 
     for k in range(niter):
         dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
         dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
         test = [anderson_ksamp([dist_1_k[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
         [metric_list[k],pvalue_list[k]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
+        if pbar:
+            pbar.update(1)
+            
+    if verbose:
+        end: float = timer()
+        print("AD tests calculation completed in {:.2f} seconds".format(end-start))
         
     return metric_list.tolist(), pvalue_list.tolist()
 
@@ -618,23 +1075,27 @@ def AD_test_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
 def AD_test_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
               dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
               niter: int = 10,
-              batch_size: int = 100000
+              batch_size: int = 100000,
+              verbose: bool = False,
+              progress_bar: bool = False
              ) -> Tuple[List[float], List[float]]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return AD_test_1_small(dist_1_input, dist_2_input, niter, batch_size)
+            return AD_test_1_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
-            return AD_test_1_large(dist_1_input, dist_2_input, niter, batch_size)
+            return AD_test_1_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     else:
-        return AD_test_1_large(dist_1_input, dist_2_input, niter, batch_size)
+        return AD_test_1_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     
 
 def AD_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     niter: int = 10,
-                    batch_size: int = 100000
+                    batch_size: int = 100000,
+                    verbose: bool = False,
+                    progress_bar: bool = False
                    ) -> Tuple[List[float], List[float]]:
     """
     The Anderson-Darling test is a non-parametric test that compares two distributions and returns a test statistic and a p-value (the test statistic distribution is known a-priori) 
@@ -672,13 +1133,19 @@ def AD_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     metric_list: np.ndarray = np.zeros(niter)
     pvalue_list: np.ndarray = np.zeros(niter)
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -696,6 +1163,17 @@ def AD_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting AD tests calculation...")
+        start: float = timer()
     
     l: int = 0
     if dist_1_symb is None and dist_2_symb is None:
@@ -706,6 +1184,8 @@ def AD_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
                 test = [anderson_ksamp([dist_1_j[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
                 [metric_list[l], pvalue_list[l]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_num[j*batch_size:(j+1)*batch_size,:]
@@ -714,6 +1194,8 @@ def AD_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
                 test = [anderson_ksamp([dist_1_j[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
                 [metric_list[l], pvalue_list[l]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -722,6 +1204,8 @@ def AD_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
                 test = [anderson_ksamp([dist_1_j[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
                 [metric_list[l], pvalue_list[l]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -730,6 +1214,12 @@ def AD_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
                 test = [anderson_ksamp([dist_1_j[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
                 [metric_list[l], pvalue_list[l]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
                 l += 1
+                if pbar:
+                    pbar.update(1)
+                    
+    if verbose:
+        end: float = timer()
+        print("AD tests calculation completed in {:.2f} seconds".format(end-start))
                 
     return metric_list.tolist(), pvalue_list.tolist()
 
@@ -737,7 +1227,9 @@ def AD_test_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
 def AD_test_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                     niter: int = 10,
-                    batch_size: int = 100000
+                    batch_size: int = 100000,
+                    verbose: bool = False,
+                    progress_bar: bool = False
                    ) -> Tuple[List[float], List[float]]:
     """
     The Anderson-Darling test is a non-parametric test that compares two distributions and returns a test statistic and a p-value (the test statistic distribution is known a-priori) 
@@ -775,13 +1267,19 @@ def AD_test_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     metric_list: np.ndarray = np.zeros(niter)
     pvalue_list: np.ndarray = np.zeros(niter)
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -801,8 +1299,19 @@ def AD_test_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting AD tests calculation...")
+        start: float = timer()
     
     l: int = 0  
     for j in range(niter):
@@ -811,6 +1320,12 @@ def AD_test_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
             dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             test = [anderson_ksamp([dist_1_j[:,dim], dist_2_k[:,dim]]) for dim in range(ndims)]
             [metric_list[l], pvalue_list[l]] = np.array([[p[0],p[2]] for p in test]).mean(axis=0)
+            if pbar:
+                pbar.update(1)
+                
+    if verbose:
+        end: float = timer()
+        print("AD tests calculation completed in {:.2f} seconds".format(end-start))
             
     return metric_list.tolist(), pvalue_list.tolist()
 
@@ -818,23 +1333,27 @@ def AD_test_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distributi
 def AD_test_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
               dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
               niter: int = 10,
-              batch_size: int = 100000
+              batch_size: int = 100000,
+              verbose: bool = False,
+              progress_bar: bool = False
              ) -> Tuple[List[float], List[float]]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return AD_test_2_small(dist_1_input, dist_2_input, niter, batch_size)
+            return AD_test_2_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
-            return AD_test_2_large(dist_1_input, dist_2_input, niter, batch_size)
+            return AD_test_2_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     else:
-        return AD_test_2_large(dist_1_input, dist_2_input, niter, batch_size)
+        return AD_test_2_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     
 
 def FN_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                niter: int = 10,
-               batch_size: int = 100000
+               batch_size: int = 100000,
+               verbose: bool = False,
+               progress_bar: bool = False
               ) -> List[float]:
     """
     The Frobenius-Norm of the difference between the correlation matrices of two distributions.
@@ -870,10 +1389,16 @@ def FN_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -891,7 +1416,18 @@ def FN_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting FN metric calculation...")
+        start: float = timer()
+    
     if dist_1_symb is None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
@@ -899,6 +1435,8 @@ def FN_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
             dist_1_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_1_k, sample_axis=0, event_axis=-1))
             dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
             values_list[k] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
@@ -906,6 +1444,8 @@ def FN_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
             dist_1_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_1_k, sample_axis=0, event_axis=-1))
             dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
             values_list[k] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
@@ -913,6 +1453,8 @@ def FN_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
             dist_1_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_1_k, sample_axis=0, event_axis=-1))
             dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
             values_list[k] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
@@ -920,6 +1462,12 @@ def FN_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
             dist_1_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_1_k, sample_axis=0, event_axis=-1))
             dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
             values_list[k] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
+            if pbar:
+                pbar.update(1)
+                
+    if verbose: 
+        end: float = timer()
+        print("FN metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
 
@@ -927,7 +1475,9 @@ def FN_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
 def FN_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                niter: int = 10,
-               batch_size: int = 100000
+               batch_size: int = 100000,
+               verbose: bool = False,
+               progress_bar: bool = False
               ) -> List[float]:
     """
     The Frobenius-Norm of the difference between the correlation matrices of two distributions.
@@ -963,10 +1513,16 @@ def FN_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -986,8 +1542,19 @@ def FN_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting FN metric calculation...")
+        start: float = timer()
 
     for k in range(niter):
         dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
@@ -995,6 +1562,12 @@ def FN_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
         dist_1_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_1_k, sample_axis=0, event_axis=-1))
         dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
         values_list[k] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
+        if pbar:
+            pbar.update(1)
+            
+    if verbose: 
+        end: float = timer()
+        print("FN metric calculation completed in {:.2f} seconds".format(end-start))
         
     return values_list.tolist()
 
@@ -1002,23 +1575,27 @@ def FN_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
 def FN_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
          dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
          niter: int = 10,
-         batch_size: int = 100000
+         batch_size: int = 100000,
+         verbose: bool = False,
+         progress_bar: bool = False
         ) -> List[float]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return FN_1_small(dist_1_input, dist_2_input, niter, batch_size)
+            return FN_1_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
-            return FN_1_large(dist_1_input, dist_2_input, niter, batch_size)
+            return FN_1_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     else:
-        return FN_1_large(dist_1_input, dist_2_input, niter, batch_size)
+        return FN_1_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     
 
 def FN_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                niter: int = 10,
-               batch_size: int = 100000
+               batch_size: int = 100000,
+               verbose: bool = False,
+               progress_bar: bool = False
               ) -> List[float]:
     """
     The Frobenius-Norm of the difference between the correlation matrices of two distributions.
@@ -1054,12 +1631,18 @@ def FN_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1077,7 +1660,18 @@ def FN_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting FN metric calculation...")
+        start: float = timer()
+    
     l: int = 0
     if dist_1_symb is None and dist_2_symb is None:
         for j in range(niter):
@@ -1088,6 +1682,8 @@ def FN_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
                 dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
                 values_list[l] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_num[j*batch_size:(j+1)*batch_size,:]
@@ -1097,6 +1693,8 @@ def FN_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
                 dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
                 values_list[l] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -1106,6 +1704,8 @@ def FN_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
                 dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
                 values_list[l] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -1115,6 +1715,12 @@ def FN_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
                 dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
                 values_list[l] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
                 l += 1
+                if pbar:
+                    pbar.update(1)
+                    
+    if verbose: 
+        end: float = timer()
+        print("FN metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
 
@@ -1122,7 +1728,9 @@ def FN_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
 def FN_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                niter: int = 10,
-               batch_size: int = 100000
+               batch_size: int = 100000,
+               verbose: bool = False,
+               progress_bar: bool = False
               ) -> List[float]:
     """
     The Frobenius-Norm of the difference between the correlation matrices of two distributions.
@@ -1158,12 +1766,18 @@ def FN_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1183,9 +1797,20 @@ def FN_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting FN metric calculation...")
+        start: float = timer()
+    
     l: int = 0  
     for j in range(niter):
         dist_1_j: tf.Tensor = dist_1_num[j*batch_size:(j+1)*batch_size,:]
@@ -1195,6 +1820,12 @@ def FN_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
             dist_2_corr = correlation_from_covariance_tf(tfp.stats.covariance(dist_2_k, sample_axis=0, event_axis=-1))
             values_list[k] = float(tf.norm(dist_1_corr - dist_2_corr).numpy())
             l += 1
+            if pbar:
+                pbar.update(1)
+                
+    if verbose: 
+        end: float = timer()
+        print("FN metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
 
@@ -1202,23 +1833,27 @@ def FN_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
 def FN_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
          dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
          niter: int = 10,
-         batch_size: int = 100000
+         batch_size: int = 100000,
+         verbose: bool = False,
+         progress_bar: bool = False  
         ) -> List[float]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return FN_2_small(dist_1_input, dist_2_input, niter, batch_size)
+            return FN_2_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
-            return FN_2_large(dist_1_input, dist_2_input, niter, batch_size)
+            return FN_2_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     else:
-        return FN_2_large(dist_1_input, dist_2_input, niter, batch_size)
+        return FN_2_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     
 
 def WD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                niter: int = 10,
-               batch_size: int = 100000
+               batch_size: int = 100000,
+               verbose: bool = False,
+               progress_bar: bool = False
               ) -> List[float]:
     """
     The Wasserstein distance between two 1D distributions.
@@ -1255,10 +1890,16 @@ def WD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1276,27 +1917,50 @@ def WD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting WD metric calculation...")
+        start: float = timer()
+    
     if dist_1_symb is None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
             dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]  
             values_list[k] = np.mean([wasserstein_distance(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
             dist_2_k = dist_2_symb.sample(batch_size)  
             values_list[k] = np.mean([wasserstein_distance(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
             dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]  
             values_list[k] = np.mean([wasserstein_distance(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
             dist_2_k = dist_2_symb.sample(batch_size)  
             values_list[k] = np.mean([wasserstein_distance(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
+            if pbar:
+                pbar.update(1)
+                
+    if verbose:
+        end: float = timer()
+        print("WD metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
 
@@ -1304,7 +1968,9 @@ def WD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
 def WD_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                niter: int = 10,
-               batch_size: int = 100000
+               batch_size: int = 100000,
+               verbose: bool = False,
+               progress_bar: bool = False
               ) -> List[float]:
     """
     The Wasserstein distance between two 1D distributions.
@@ -1341,10 +2007,16 @@ def WD_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1364,13 +2036,30 @@ def WD_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting WD metric calculation...")
+        start: float = timer()
+    
     for k in range(niter):
         dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
         dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
         values_list[k] = np.mean([wasserstein_distance(dist_1_k[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
+        if pbar:
+            pbar.update(1)
+            
+    if verbose:
+        end: float = timer()
+        print("WD metric calculation completed in {:.2f} seconds".format(end-start))
         
     return values_list.tolist()
 
@@ -1378,23 +2067,27 @@ def WD_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
 def WD_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
          dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
          niter: int = 10,
-         batch_size: int = 100000
+         batch_size: int = 100000,
+         verbose: bool = False,
+         progress_bar: bool = False
         ) -> List[float]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return WD_1_small(dist_1_input, dist_2_input, niter, batch_size)
+            return WD_1_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
-            return WD_1_large(dist_1_input, dist_2_input, niter, batch_size)
+            return WD_1_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     else:
-        return WD_1_large(dist_1_input, dist_2_input, niter, batch_size)
+        return WD_1_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
 
         
 def WD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                niter: int = 10,
-               batch_size: int = 100000
+               batch_size: int = 100000,
+               verbose: bool = False,
+               progress_bar: bool = False
               ) -> List[float]:
     """
     The Wasserstein distance between two 1D distributions.
@@ -1431,12 +2124,18 @@ def WD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1454,7 +2153,18 @@ def WD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting WD metric calculation...")
+        start: float = timer()
+    
     l: int = 0
     if dist_1_symb is None and dist_2_symb is None:
         for j in range(niter):
@@ -1463,6 +2173,8 @@ def WD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
                 dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
                 values_list[l] = np.mean([wasserstein_distance(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_num[j*batch_size:(j+1)*batch_size,:]
@@ -1470,6 +2182,8 @@ def WD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
                 dist_2_k = dist_2_symb.sample(batch_size)
                 values_list[l] = np.mean([wasserstein_distance(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -1477,6 +2191,8 @@ def WD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
                 dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]  
                 values_list[l] = np.mean([wasserstein_distance(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -1484,6 +2200,12 @@ def WD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
                 dist_2_k = dist_2_symb.sample(batch_size)
                 values_list[l] = np.mean([wasserstein_distance(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
                 l += 1
+                if pbar:
+                    pbar.update(1)
+                    
+    if verbose:
+        end: float = timer()
+        print("WD metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
 
@@ -1491,7 +2213,9 @@ def WD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
 def WD_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
                niter: int = 10,
-               batch_size: int = 100000
+               batch_size: int = 100000,
+               verbose: bool = False,
+               progress_bar: bool = False
               ) -> List[float]:
     """
     The Wasserstein distance between two 1D distributions.
@@ -1528,12 +2252,18 @@ def WD_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1553,9 +2283,20 @@ def WD_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting WD metric calculation...")
+        start: float = timer()
+    
     l: int = 0  
     for j in range(niter):
         dist_1_j: tf.Tensor = dist_1_num[j*batch_size:(j+1)*batch_size,:]
@@ -1563,6 +2304,12 @@ def WD_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
             dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             values_list[l] = np.mean([wasserstein_distance(dist_1_j[:,dim], dist_2_k[:,dim]) for dim in range(ndims)])
             l += 1
+            if pbar:
+                pbar.update(1) # type: ignore
+                
+    if verbose:
+        end: float = timer()
+        print("WD metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
         
@@ -1570,17 +2317,19 @@ def WD_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, t
 def WD_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
          dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
          niter: int = 10,
-         batch_size: int = 100000
+         batch_size: int = 100000,
+         verbose: bool = False,
+         progress_bar: bool = False
         ) -> List[float]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return WD_2_small(dist_1_input, dist_2_input, niter, batch_size)
+            return WD_2_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
-            return WD_2_large(dist_1_input, dist_2_input, niter, batch_size)
+            return WD_2_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     else:
-        return WD_2_large(dist_1_input, dist_2_input, niter, batch_size)
+        return WD_2_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
 
 
 def SWD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
@@ -1588,7 +2337,9 @@ def SWD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
                 niter: int = 10,
                 batch_size: int = 100000,
                 nslices: int = 100,
-                seed: Optional[int] = None
+                seed: Optional[int] = None,
+                verbose: bool = False,
+                progress_bar: bool = False
                ) -> List[float]:
     """
     Compute the sliced Wasserstein distance between two multi-dimensional distribution as the average over slices of the value of the 1D Wasserstein distances 
@@ -1627,10 +2378,16 @@ def SWD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1648,7 +2405,16 @@ def SWD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+        
+    if verbose:
+        print("Starting SWD metric calculation...")
+        start: float = timer()
+    
     if dist_1_symb is None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
@@ -1656,6 +2422,8 @@ def SWD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
             directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
             directions /= tf.norm(directions, axis=1)[:, None]
             values_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+            if pbar:
+                pbar.update(1) # type: ignore
     elif dist_1_symb is None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
@@ -1663,6 +2431,8 @@ def SWD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
             directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
             directions /= tf.norm(directions, axis=1)[:, None]
             values_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+            if pbar:
+                pbar.update(1) # type: ignore
     elif dist_1_symb is not None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
@@ -1670,6 +2440,8 @@ def SWD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
             directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
             directions /= tf.norm(directions, axis=1)[:, None]
             values_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+            if pbar:
+                pbar.update(1) # type: ignore
     elif dist_1_symb is not None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
@@ -1677,6 +2449,12 @@ def SWD_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
             directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
             directions /= tf.norm(directions, axis=1)[:, None]
             values_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+            if pbar:
+                pbar.update(1) # type: ignore
+                
+    if verbose:
+        end: float = timer()
+        print("SWD metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
 
@@ -1686,7 +2464,9 @@ def SWD_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
                 niter: int = 10,
                 batch_size: int = 100000,
                 nslices: int = 100,
-                seed: Optional[int] = None
+                seed: Optional[int] = None,
+                verbose: bool = False,
+                progress_bar: bool = False
                ) -> List[float]:
     """
     Compute the sliced Wasserstein distance between two multi-dimensional distribution as the average over slices of the value of the 1D Wasserstein distances 
@@ -1725,10 +2505,16 @@ def SWD_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
     nsamples_1: Optional[int]
     nsamples_2: Optional[int]
     nsamples: Optional[int] = None
+    dtype_1: tf.DType
+    dtype_2: tf.DType
+    dtype: tf.DType
     values_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1748,15 +2534,30 @@ def SWD_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+        
+    if verbose:
+        print("Starting SWD metric calculation...")
+        start: float = timer()
+    
     for k in range(niter):
         dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
         dist_2_k: tf.Tensor = dist_2_num[k*batch_size:(k+1)*batch_size,:]
         directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
         directions /= tf.norm(directions, axis=1)[:, None]
         values_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+        if pbar:
+            pbar.update(1)
+            
+    if verbose:
+        end: float = timer()
+        print("SWD metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
 
@@ -1766,17 +2567,19 @@ def SWD_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Ten
           niter: int = 10,
           batch_size: int = 100000,
           nslices: int = 100,
-          seed: Optional[int] = None
+          seed: Optional[int] = None,
+          verbose: bool = False,
+          progress_bar: bool = False
          ) -> List[float]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return SWD_1_small(dist_1_input, dist_2_input, niter, batch_size)
+            return SWD_1_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
-            return SWD_1_large(dist_1_input, dist_2_input, niter, batch_size)
+            return SWD_1_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     else:
-        return SWD_1_large(dist_1_input, dist_2_input, niter, batch_size)
+        return SWD_1_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
 
 
 def SWD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
@@ -1784,7 +2587,9 @@ def SWD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
                 niter: int = 10,
                 batch_size: int = 100000,
                 nslices: int = 100,
-                seed: Optional[int] = None
+                seed: Optional[int] = None,
+                verbose: bool = False,
+                progress_bar: bool = False
                ) -> List[float]:
     """
     Compute the sliced Wasserstein distance between two sets of points using nslices random directions and the p-th Wasserstein distance.
@@ -1808,8 +2613,11 @@ def SWD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1827,7 +2635,16 @@ def SWD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+        
+    if verbose:
+        print("Starting SWD metric calculation...")
+        start: float = timer()
+    
     l: int = 0
     if dist_1_symb is None and dist_2_symb is None:
         for j in range(niter):
@@ -1838,6 +2655,8 @@ def SWD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
                 directions /= tf.norm(directions, axis=1)[:, None]
                 values_list[l] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_num[j*batch_size:(j+1)*batch_size,:]
@@ -1847,6 +2666,8 @@ def SWD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
                 directions /= tf.norm(directions, axis=1)[:, None]
                 values_list[l] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -1856,6 +2677,8 @@ def SWD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
                 directions /= tf.norm(directions, axis=1)[:, None]
                 values_list[l] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -1865,6 +2688,12 @@ def SWD_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
                 directions /= tf.norm(directions, axis=1)[:, None]
                 values_list[l] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
                 l += 1
+                if pbar:
+                    pbar.update(1)
+                    
+    if verbose:
+        end: float = timer()
+        print("SWD metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
         
@@ -1874,7 +2703,9 @@ def SWD_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
                 niter: int = 10,
                 batch_size: int = 100000,
                 nslices: int = 100,
-                seed: Optional[int] = None
+                seed: Optional[int] = None,
+                verbose: bool = False,
+                progress_bar: bool = False
                ) -> List[float]:
     """
     Compute the sliced Wasserstein distance between two sets of points using nslices random directions and the p-th Wasserstein distance.
@@ -1898,8 +2729,11 @@ def SWD_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1919,9 +2753,20 @@ def SWD_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
         
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting SWD metric calculation...")
+        start: float = timer()
+    
     l: int = 0  
     for j in range(niter):
         dist_1_j: tf.Tensor = dist_1_num[j*batch_size:(j+1)*batch_size,:]
@@ -1931,6 +2776,12 @@ def SWD_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, 
             directions /= tf.norm(directions, axis=1)[:, None]
             values_list[l] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
             l += 1
+            if pbar:
+                pbar.update(1)
+                
+    if verbose:
+        end: float = timer()
+        print("SWD metric calculation completed in {:.2f} seconds".format(end-start))
 
     return values_list.tolist()
         
@@ -1940,17 +2791,19 @@ def SWD_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Ten
           niter: int = 10,
           batch_size: int = 100000,
           nslices: int = 100,
-          seed: Optional[int] = None
+          seed: Optional[int] = None,
+          verbose: bool = False,
+          progress_bar: bool = False
          ) -> List[float]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return SWD_2_small(dist_1_input, dist_2_input, niter, batch_size)
+            return SWD_2_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
-            return SWD_2_large(dist_1_input, dist_2_input, niter, batch_size)
+            return SWD_2_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
     else:
-        return SWD_2_large(dist_1_input, dist_2_input, niter, batch_size)
+        return SWD_2_large(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
 
 
 def ComputeMetrics_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
@@ -1958,7 +2811,9 @@ def ComputeMetrics_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
                            niter: int = 10,
                            batch_size: int = 100000,
                            nslices: int = 100,
-                           seed: Optional[int] = None
+                           seed: Optional[int] = None,
+                           verbose: bool = False,
+                           progress_bar: bool = False
                           ) -> Tuple[List[float],...]:
     ndims_1: int
     ndims_2: int
@@ -1973,8 +2828,11 @@ def ComputeMetrics_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
     wd_list: np.ndarray = np.zeros(niter)
     swd_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -1992,6 +2850,17 @@ def ComputeMetrics_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting metrics calculation...")
+        start: float = timer()
     
     if dist_1_symb is None and dist_2_symb is None:
         for k in range(niter):
@@ -2007,6 +2876,8 @@ def ComputeMetrics_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
             directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
             directions /= tf.norm(directions, axis=1)[:, None]
             swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
@@ -2021,6 +2892,8 @@ def ComputeMetrics_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
             directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
             directions /= tf.norm(directions, axis=1)[:, None]
             swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
@@ -2035,6 +2908,8 @@ def ComputeMetrics_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
             directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
             directions /= tf.norm(directions, axis=1)[:, None]
             swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+            if pbar:
+                pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for k in range(niter):
             dist_1_k = dist_1_symb.sample(batch_size)
@@ -2049,6 +2924,12 @@ def ComputeMetrics_1_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
             directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
             directions /= tf.norm(directions, axis=1)[:, None]
             swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+            if pbar:
+                pbar.update(1)
+                
+    if verbose:
+        end: float = timer()
+        print("Metrics calculation completed in {:.2f} seconds".format(end-start))
     
     return ks_metric_list.tolist(), ks_pvalue_list.tolist(), ad_metric_list.tolist(), ad_pvalue_list.tolist(), fn_list.tolist(), wd_list.tolist(), swd_list.tolist()
 
@@ -2058,7 +2939,9 @@ def ComputeMetrics_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
                            niter: int = 10,
                            batch_size: int = 100000,
                            nslices: int = 100,
-                           seed: Optional[int] = None
+                           seed: Optional[int] = None,
+                           verbose: bool = False,
+                           progress_bar: bool = False
                           ) -> Tuple[List[float],...]:
     ndims_1: int
     ndims_2: int
@@ -2073,8 +2956,11 @@ def ComputeMetrics_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
     wd_list: np.ndarray = np.zeros(niter)
     swd_list: np.ndarray = np.zeros(niter)
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -2094,8 +2980,19 @@ def ComputeMetrics_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if progress_bar:
+        pbar = tqdm(total = niter, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting metrics calculation...")
+        start: float = timer()
     
     for k in range(niter):
         dist_1_k: tf.Tensor = dist_1_num[k*batch_size:(k+1)*batch_size,:]
@@ -2110,6 +3007,12 @@ def ComputeMetrics_1_small(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
         directions = tf.random.normal(shape=(nslices, ndims),dtype=dist_1_k.dtype)
         directions /= tf.norm(directions, axis=1)[:, None]
         swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_k, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
+        if pbar:
+            pbar.update(1)
+            
+    if verbose:
+        end: float = timer()
+        print("Metrics calculation completed in {:.2f} seconds".format(end-start))
     
     return ks_metric_list.tolist(), ks_pvalue_list.tolist(), ad_metric_list.tolist(), ad_pvalue_list.tolist(), fn_list.tolist(), wd_list.tolist(), swd_list.tolist()
 
@@ -2119,17 +3022,19 @@ def ComputeMetrics_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribut
                      niter: int = 10,
                      batch_size: int = 100000,
                      nslices: int = 100,
-                     seed: Optional[int] = None
+                     seed: Optional[int] = None,
+                     verbose: bool = False,
+                     progress_bar: bool = False
                     ) -> Tuple[List[float],...]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return ComputeMetrics_1_small(dist_1_input, dist_2_input, niter, batch_size, nslices, seed)
+            return ComputeMetrics_1_small(dist_1_input, dist_2_input, niter, batch_size, nslices, seed, verbose, progress_bar)
         except:
-            return ComputeMetrics_1_large(dist_1_input, dist_2_input, niter, batch_size, nslices, seed)
+            return ComputeMetrics_1_large(dist_1_input, dist_2_input, niter, batch_size, nslices, seed, verbose, progress_bar)
     else:
-        return ComputeMetrics_1_large(dist_1_input, dist_2_input, niter, batch_size, nslices, seed)
+        return ComputeMetrics_1_large(dist_1_input, dist_2_input, niter, batch_size, nslices, seed, verbose, progress_bar)
 
 
 def ComputeMetrics_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
@@ -2137,7 +3042,9 @@ def ComputeMetrics_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
                            niter: int = 10,
                            batch_size: int = 100000,
                            nslices: int = 100,
-                           seed: Optional[int] = None
+                           seed: Optional[int] = None,
+                           verbose: bool = False,
+                           progress_bar: bool = False
                           ) -> Tuple[List[float],...]:
     ndims_1: int
     ndims_2: int
@@ -2154,8 +3061,11 @@ def ComputeMetrics_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -2173,6 +3083,17 @@ def ComputeMetrics_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
         if dist_2_symb is None:
             dist_2_num = dist_2_num[:nsamples,:]
         batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting metrics calculation...")
+        start: float = timer()
     
     l: int = 0
     if dist_1_symb is None and dist_2_symb is None:
@@ -2191,6 +3112,8 @@ def ComputeMetrics_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
                 directions /= tf.norm(directions, axis=1)[:, None]
                 swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_num[j*batch_size:(j+1)*batch_size,:]
@@ -2207,6 +3130,8 @@ def ComputeMetrics_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
                 directions /= tf.norm(directions, axis=1)[:, None]
                 swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -2223,6 +3148,8 @@ def ComputeMetrics_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
                 directions /= tf.norm(directions, axis=1)[:, None]
                 swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
                 l += 1
+                if pbar:
+                    pbar.update(1)
     elif dist_1_symb is not None and dist_2_symb is not None:
         for j in range(niter):
             dist_1_j = dist_1_symb.sample(batch_size)
@@ -2239,6 +3166,12 @@ def ComputeMetrics_2_large(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
                 directions /= tf.norm(directions, axis=1)[:, None]
                 swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
                 l += 1
+                if pbar:
+                    pbar.update(1)
+                    
+    if verbose:
+        end: float = timer()
+        print("Metrics calculation completed in {:.2f} seconds".format(end-start))
     
     return ks_metric_list.tolist(), ks_pvalue_list.tolist(), ad_metric_list.tolist(), ad_pvalue_list.tolist(), fn_list.tolist(), wd_list.tolist(), swd_list.tolist()
 
@@ -2248,7 +3181,9 @@ def ComputeMetrics_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
                            niter: int = 10,
                            batch_size: int = 100000,
                            nslices: int = 100,
-                           seed: Optional[int] = None
+                           seed: Optional[int] = None,
+                           verbose: bool = False,
+                           progress_bar: bool = False  
                           ) -> Tuple[List[float],...]:
     ndims_1: int
     ndims_2: int
@@ -2265,8 +3200,11 @@ def ComputeMetrics_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
     
     niter = int(np.ceil(np.sqrt(niter)))
     
-    dist_1_symb, dist_1_num, ndims_1, nsamples_1 = parse_input_dist(dist_1_input)
-    dist_2_symb, dist_2_num, ndims_2, nsamples_2 = parse_input_dist(dist_2_input)
+    is_symb_1, dist_1_symb, dist_1_num, ndims_1, nsamples_1 = __parse_input_dist(dist_1_input, verbose = verbose)
+    is_symb_2, dist_2_symb, dist_2_num, ndims_2, nsamples_2 = __parse_input_dist(dist_2_input, verbose = verbose)
+    
+    dtype_1 = dist_1_num.dtype
+    dtype_2 = dist_2_num.dtype
     
     if ndims_1 != ndims_2:
         raise ValueError("dist_1 and dist_2 must have the same number of dimensions")
@@ -2286,8 +3224,19 @@ def ComputeMetrics_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
         dist_2_num = dist_2_num[:nsamples,:]
     else:
         dist_2_num = dist_2_symb.sample(batch_size*niter)
-    if nsamples is None:
-        batch_size = batch_size // niter
+    if nsamples is not None:
+        batch_size = nsamples // niter
+        if batch_size == 0:
+            raise ValueError("nsamples must be greater than niter when at least one distribution is numerical")
+        
+    if progress_bar:
+        pbar: Optional[tqdm] = tqdm(total = niter**2, desc = "Iterations")
+    else:
+        pbar = None
+        
+    if verbose:
+        print("Starting metrics calculation...")
+        start: float = timer()
     
     l: int = 0
     for j in range(niter):
@@ -2305,6 +3254,12 @@ def ComputeMetrics_2_small(dist_1_input: Union[np.ndarray, tfp.distributions.Dis
             directions /= tf.norm(directions, axis=1)[:, None]
             swd_list[k] = np.mean([wasserstein_distance(tf.linalg.matvec(dist_1_j, direction), tf.linalg.matvec(dist_2_k, direction)) for direction in directions])
             l += 1
+            if pbar:
+                pbar.update(1)
+                
+    if verbose:
+        end: float = timer()
+        print("Metrics calculation completed in {:.2f} seconds".format(end-start))
     
     return ks_metric_list.tolist(), ks_pvalue_list.tolist(), ad_metric_list.tolist(), ad_pvalue_list.tolist(), fn_list.tolist(), wd_list.tolist(), swd_list.tolist()
 
@@ -2314,17 +3269,31 @@ def ComputeMetrics_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribut
                      niter: int = 10,
                      batch_size: int = 100000,
                      nslices: int = 100,
-                     seed: Optional[int] = None
+                     seed: Optional[int] = None,
+                     verbose: bool = False,
+                     progress_bar: bool = False
                     ) -> Tuple[List[float],...]:
-    _, _, ndims, _ = parse_input_dist(dist_1_input)
+    _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
     if nn < 1e8:
         try:
-            return ComputeMetrics_2_small(dist_1_input, dist_2_input, niter, batch_size, nslices, seed)
+            return ComputeMetrics_2_small(dist_1_input, dist_2_input, niter, batch_size, nslices, seed, verbose, progress_bar)
         except:
-            return ComputeMetrics_2_large(dist_1_input, dist_2_input, niter, batch_size, nslices, seed)
+            return ComputeMetrics_2_large(dist_1_input, dist_2_input, niter, batch_size, nslices, seed, verbose, progress_bar)
     else:
-        return ComputeMetrics_2_large(dist_1_input, dist_2_input, niter, batch_size, nslices, seed)
+        return ComputeMetrics_2_large(dist_1_input, dist_2_input, niter, batch_size, nslices, seed, verbose, progress_bar)
+
+
+def ComputeMetrics(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
+                   dist_2_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
+                   niter: int = 10,
+                   batch_size: int = 100000,
+                   nslices: int = 100,
+                   seed: Optional[int] = None,
+                   verbose: bool = False,
+                   progress_bar: bool = False
+                  ) -> Tuple[List[float],...]:
+    return ComputeMetrics_1(dist_1_input, dist_2_input, niter, batch_size, nslices, seed, verbose, progress_bar)
 
 
 def ComputeMetrics_sequential(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tensor],
@@ -2332,7 +3301,9 @@ def ComputeMetrics_sequential(dist_1_input: Union[np.ndarray, tfp.distributions.
                               niter: int = 10,
                               batch_size: int = 100000,
                               nslices: int = 100,
-                              seed: Optional[int] = None
+                              seed: Optional[int] = None,
+                              verbose: bool = False,
+                              progress_bar: bool = False
                              ) -> Tuple[List[float],...]:
     """
     Function that computes the metrics. The following metrics are computed:
@@ -2342,9 +3313,9 @@ def ComputeMetrics_sequential(dist_1_input: Union[np.ndarray, tfp.distributions.
         - Mean of values of 1D WD
         - SWD values
     """
-    ks_metric_list, ks_pvalue_list = KS_test_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size)
-    ad_metric_list, ad_pvalue_list = AD_test_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size)
-    fn_list = FN_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size)
-    wd_list = WD_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size)
-    swd_list = SWD_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size, nslices = nslices, seed = seed)
+    ks_metric_list, ks_pvalue_list = KS_test_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size, verbose = verbose, progress_bar = progress_bar)
+    ad_metric_list, ad_pvalue_list = AD_test_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size, verbose = verbose, progress_bar = progress_bar)
+    fn_list = FN_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size, verbose = verbose, progress_bar = progress_bar)
+    wd_list = WD_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size, verbose = verbose, progress_bar = progress_bar)
+    swd_list = SWD_1_large(dist_1_input, dist_2_input, niter = niter, batch_size = batch_size, nslices = nslices, seed = seed, verbose = verbose, progress_bar = progress_bar)
     return ks_metric_list, ks_pvalue_list, ad_metric_list, ad_pvalue_list, fn_list, wd_list, swd_list
