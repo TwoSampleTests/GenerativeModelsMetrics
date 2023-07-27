@@ -1,8 +1,6 @@
 __all__ = [
     'reset_random_seeds',
     'NumpyDistribution',
-    'PlaceholderDistribution_np',
-    'PlaceholderDistribution_tf',
     'get_best_dtype_np',
     'get_best_dtype_tf',
     'conditional_print',
@@ -44,7 +42,8 @@ def reset_random_seeds(seed):
     random.seed(seed)
 
 class NumpyDistribution:
-    """Wrapper class for numpy.random.Generator distributions.
+    """
+    Wrapper class for numpy.random.Generator distributions.
     Example:
 
     .. code-block:: python
@@ -80,7 +79,7 @@ class NumpyDistribution:
             reset_random_seeds(seed = seed)
         method: Callable = getattr(self.generator, self.distribution)
         if inspect.isroutine(method):
-            return method(n, **self.params).astype(self.dtype)
+            return method(size=n, **self.params).astype(self.dtype)
         else:
             raise ValueError(f"{self.distribution} is not a callable method of numpy.random.Generator.")
 
@@ -90,39 +89,6 @@ DataDistTypeNP = Union[DataTypeNP, DistTypeNP]
 DataDistTypeTF = Union[DataTypeTF, DistTypeTF]
 DataDistType = Union[DataDistTypeNP, DataDistTypeTF]
 BoolType = Union[bool, BoolTypeTF, BoolTypeNP]
-
-class PlaceholderDistribution_np(NumpyDistribution):
-    def __init__(self, **kwargs):
-        super(PlaceholderDistribution_np, self).__init__(distribution = "standard_normal", **kwargs)
-        
-
-class PlaceholderDistribution_tf(tfp.distributions.Distribution):
-
-    def __init__(self, 
-                 dtype: DTypeType = tf.float32,
-                 **kwargs):
-        super(PlaceholderDistribution_tf, self).__init__(dtype = dtype,
-                                                         reparameterization_type = tfd.FULLY_REPARAMETERIZED,
-                                                         validate_args = False,
-                                                         allow_nan_stats = False,
-                                                         **kwargs)
-
-    def _sample_n(self, n, seed=None):
-        #print("This is a placeholder distribution generated because passed samples are already numeric.")
-        raise NotImplementedError("This is a placeholder distribution generated because passed samples are already numeric.")
-
-    def _log_prob(self, value):
-        raise NotImplementedError("This is a placeholder distribution generated because passed samples are already numeric.")
-
-    def _mean(self):
-        raise NotImplementedError("This is a placeholder distribution generated because passed samples are already numeric.")
-        
-    def _variance(self):
-        raise NotImplementedError("This is a placeholder distribution generated because passed samples are already numeric.")
-    
-    def _stddev(self):
-        raise NotImplementedError("This is a placeholder distribution generated because passed samples are already numeric.")
-    
     
 def get_best_dtype_np(dtype_1: Union[type, np.dtype],
                       dtype_2: Union[type, np.dtype]) -> Union[type, np.dtype]:
@@ -154,8 +120,8 @@ def conditional_tf_print(verbose: tf.Tensor = tf.Tensor(False),
     tf.cond(tf.equal(verbose, True), lambda: tf.print(*args), lambda: verbose)
 
 def parse_input_dist_np(dist_input: DataDistTypeNP,
-                          verbose: bool = False
-                         ) -> Tuple[bool, DistTypeNP, DataTypeNP, int, int]:
+                        verbose: bool = False
+                       ) -> Tuple[bool, DistTypeNP, DataTypeNP, int, int]:
     dist_symb: DistTypeNP
     dist_num: DataTypeNP
     nsamples: int
@@ -169,19 +135,19 @@ def parse_input_dist_np(dist_input: DataDistTypeNP,
         if len(dist_input.shape) != 2:
             raise ValueError("Input must be a 2-dimensional numpy array or a tfp.distributions.Distribution object")
         else:
-            dist_symb = PlaceholderDistribution_np()
+            dist_symb = NumpyDistribution()
             dist_num = dist_input
             nsamples, ndims = dist_num.shape
             is_symb = False
-    elif isinstance(dist_input, tfp.distributions.Distribution):
+    elif isinstance(dist_input, NumpyDistribution):
         if verbose:
-            print("Input distribution is a tfp.distributions.Distribution object.")
+            print("Input distribution is a NumpyDistribution object.")
         dist_symb = dist_input
         dist_num = np.array([[]],dtype=dist_symb.dtype)
         nsamples, ndims = 0, dist_symb.sample(2).shape[1]
         is_symb = True
     else:
-        raise ValueError("Input must be either a numpy array or a tfp.distributions.Distribution object.")
+        raise ValueError("Input must be either a numpy array or a NumpyDistribution object.")
     return is_symb, dist_symb, dist_num, ndims, nsamples
 
 
@@ -209,7 +175,7 @@ def parse_input_dist_tf(dist_input: DataDistType,
         conditional_tf_print(verbose, "Input distribution is a numeric numpy array or tf.Tensor.")
         if tf.rank(dist_input) != 2:
             tf.debugging.assert_equal(tf.rank(dist_input), 2, "Input must be a 2-dimensional numpy array or a tfp.distributions.Distribution object.")
-        dist_symb = tfp.distributions.Normal(loc=tf.zeros(dist_input.shape[1]), scale=tf.ones(dist_input.shape[1]))#PlaceholderDistribution_tf()
+        dist_symb = tfp.distributions.Normal(loc=tf.zeros(dist_input.shape[1]), scale=tf.ones(dist_input.shape[1])) # type: ignore
         dist_num = tf.convert_to_tensor(dist_input)
         nsamples, ndims = tf.unstack(tf.shape(dist_num))
         return tf.constant(False), dist_symb, dist_num, ndims, nsamples
@@ -435,7 +401,7 @@ def _ks_2samp_tf_internal(data1: tf.Tensor,
                               precision: int
                              ) -> tf.Tensor:
             z: tf.Tensor = tf.sqrt(en) * d
-            prob: tf.Tensor = 1 - kolmogorov_cdf(z, precision)
+            prob: tf.Tensor = 1 - kolmogorov_cdf(z, precision) # type: ignore
             return prob
 
         def one_sided_p_value() -> tf.Tensor:

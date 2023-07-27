@@ -296,11 +296,24 @@ class TwoSampleTestInputs(object):
                     print("To use tf mode, please use tf distributions or numerical tensors/arrays.")
                 self.use_tf = False
         if self.use_tf:
-            return parse_input_dist_tf(dist_input = dist_input, verbose = verbose)
+            if isinstance(dist_input, (tf.Tensor, tfp.distributions.Distribution)):
+                return parse_input_dist_tf(dist_input = dist_input, verbose = verbose)
+            elif isinstance(dist_input, (np.ndarray, NumpyDistribution)):
+                if self.verbose:
+                    print("To use tf mode, please use tf distributions or numerical tensors/arrays.")
+                self.use_tf = False
+                return parse_input_dist_np(dist_input = dist_input, verbose = verbose)
+            else:
+                raise TypeError("dist_input must be a tf.Tensor, tfp.distributions.Distribution, np.ndarray, or NumpyDistribution")
         else:
-            if not isinstance(dist_input, (np.ndarray, NumpyDistribution)):
-                raise ValueError("dist_input must be a numpy array or a NumpyDistribution when in 'numpy' mode.")
-            return parse_input_dist_np(dist_input = dist_input, verbose = verbose)
+            if isinstance(dist_input, (tf.Tensor, tfp.distributions.Distribution)):
+                if self.verbose:
+                    print("Using numpy mode with TensorFlow inputs.")
+                return parse_input_dist_tf(dist_input = dist_input, verbose = verbose)
+            elif isinstance(dist_input, (np.ndarray, NumpyDistribution)):
+                return parse_input_dist_np(dist_input = dist_input, verbose = verbose)
+            else:
+                raise TypeError("dist_input must be a tf.Tensor, tfp.distributions.Distribution, np.ndarray, or NumpyDistribution")
         
     def __get_best_dtype(self,
                          dtype_1: DTypeType,
@@ -325,8 +338,10 @@ class TwoSampleTestInputs(object):
         
     def __check_set_dtype(self) -> None:
         self._dtype = self.__get_best_dtype(self.dtype_input, self.__get_best_dtype(self.dtype_1, self.dtype_2))
-        
+    
     def __check_set_ndims_np(self) -> None:
+        self._ndims_1 = int(self.ndims_1)
+        self._ndims_2 = int(self.ndims_2)
         if not (isinstance(self.ndims_1, int) and isinstance(self.ndims_2, int)):
             raise ValueError("ndims_1 and ndims_2 should be integers when in 'numpy' mode.")
         if self.ndims_1 != self.ndims_2:
@@ -359,6 +374,8 @@ class TwoSampleTestInputs(object):
             self.__check_set_ndims_np()
             
     def __check_set_nsamples_np(self) -> None:
+        self._nsamples_1 = int(self.nsamples_1)
+        self._nsamples_2 = int(self.nsamples_2)
         if not (isinstance(self.nsamples_1, int) and isinstance(self.nsamples_2, int)):
             raise ValueError("nsamples_1 and nsamples_2 should be integers when in 'numpy' mode.")
         if self.nsamples_1 != 0 and self.nsamples_2 != 0:
@@ -415,16 +432,18 @@ class TwoSampleTestInputs(object):
             self.__check_set_small_sample_np()
             
     def __check_set_distributions_np(self) -> None:
+        seed_dist_1  = int(1e6)  # Seed for distribution 1
+        seed_dist_2  = int(1e12)  # Seed for distribution 2
         if self.is_symb_1:
             if self.small_sample:
                 if isinstance(self.dist_1_symb, NumpyDistribution):
-                    self._dist_1_num = self.dist_1_symb.sample(self.nsamples).astype(self.dtype)
+                    self._dist_1_num = self.dist_1_symb.sample(self.nsamples, seed = int(seed_dist_1)).astype(self.dtype)
                 elif isinstance(self._dist_1_symb, tfp.distributions.Distribution):
-                    self._dist_1_num = self.dist_1_symb.sample(self.nsamples).numpy().astype(self.dtype) # type: ignore
+                    self._dist_1_num = self.dist_1_symb.sample(self.nsamples, seed = int(seed_dist_1)).numpy().astype(self.dtype) # type: ignore
                 else:
                     raise ValueError("dist_1_symb should be a subclass of NumpyDistribution or tfp.distributions.Distribution.")
             else:
-                self._dist_1_num = tf.convert_to_tensor([[]],dtype=dist_1_symb.dtype)
+                self._dist_1_num = tf.convert_to_tensor([[]], dtype = self.dist_1_symb.dtype) # type: ignore
         else:
             if isinstance(self.dist_1_num, (np.ndarray, tf.Tensor)):
                 self._dist_1_num = self.dist_1_num[:self.nsamples,:].astype(self.dtype)
@@ -433,13 +452,13 @@ class TwoSampleTestInputs(object):
         if self.is_symb_2:
             if self.small_sample:
                 if isinstance(self.dist_2_symb, NumpyDistribution):
-                    self._dist_2_num = self.dist_2_symb.sample(self.nsamples).astype(self.dtype)
+                    self._dist_2_num = self.dist_2_symb.sample(self.nsamples, seed = int(seed_dist_2)).astype(self.dtype)
                 elif isinstance(self.dist_2_symb, tfp.distributions.Distribution):
-                    self._dist_2_num = self.dist_2_symb.sample(self.nsamples).numpy().astype(self.dtype) # type: ignore
+                    self._dist_2_num = self.dist_2_symb.sample(self.nsamples, seed = int(seed_dist_2)).numpy().astype(self.dtype) # type: ignore
                 else:
                     raise ValueError("dist_2_symb should be a subclass of NumpyDistribution or tfp.distributions.Distribution.")
             else:
-                self._dist_2_num = tf.convert_to_tensor([[]],dtype=dist_2_symb.dtype)
+                self._dist_2_num = tf.convert_to_tensor([[]], dtype = self.dist_2_symb.dtype) # type: ignore
         else:
             if isinstance(self.dist_2_num, (np.ndarray, tf.Tensor)):
                 self._dist_2_num = self.dist_2_num[:self.nsamples,:].astype(self.dtype)
@@ -448,9 +467,10 @@ class TwoSampleTestInputs(object):
             
     def __check_set_distributions_tf(self) -> None:
         # Utility functions
-        def set_dist_num_from_symb(dist: tfp.distributions.Distribution) -> tf.Tensor:
+        def set_dist_num_from_symb(dist: tfp.distributions.Distribution,
+                                   seed: int = 0) -> tf.Tensor:
             if isinstance(dist, tfp.distributions.Distribution):
-                dist_num: tf.Tensor = tf.cast(dist.sample(self.nsamples), dtype = self.dtype) # type: ignore
+                dist_num: tf.Tensor = tf.cast(dist.sample(self.nsamples, seed = int(seed)), dtype = self.dtype) # type: ignore
             else:
                 raise ValueError("dist should be an instance of tfp.distributions.Distribution.")
             return dist_num
@@ -461,14 +481,17 @@ class TwoSampleTestInputs(object):
             else:
                 raise ValueError("dist_num should be an instance of tf.Tensor.")
         
+        seed_dist_1  = int(1e6)  # Seed for distribution 1
+        seed_dist_2  = int(1e12)  # Seed for distribution 2
+        
         dist_1_num = tf.cond(self.is_symb_1,
                              true_fn = lambda: tf.cond(self.small_sample,
-                                                       true_fn = lambda: set_dist_num_from_symb(self.dist_1_symb),
+                                                       true_fn = lambda: set_dist_num_from_symb(self.dist_1_symb, seed = seed_dist_1),
                                                        false_fn = lambda: return_dist_num(self.dist_1_num)),
                              false_fn = lambda: return_dist_num(self.dist_1_num))
         dist_2_num = tf.cond(self.is_symb_2,
                              true_fn = lambda: tf.cond(self.small_sample,
-                                                       true_fn = lambda: set_dist_num_from_symb(self.dist_1_symb),
+                                                       true_fn = lambda: set_dist_num_from_symb(self.dist_2_symb, seed = seed_dist_2),
                                                        false_fn = lambda: return_dist_num(self.dist_2_num)),
                              false_fn = lambda: return_dist_num(self.dist_2_num))
         self._dist_1_num = tf.cast(dist_1_num, self.dtype)[:self.nsamples, :] # type: ignore
@@ -572,15 +595,16 @@ class TwoSampleTestResults(object):
             result.print_result(print_mode = print_mode)
     
     def get_results_as_dataframe(self,
+                                 sort_kwargs: dict = {"by": ["batch_size","niter"], "ascending": [True]},
                                  print_mode: str = "full"
                                 ) -> pd.DataFrame:
         df = pd.DataFrame()
         for result in self.results:
             df = pd.concat([df, result.result_to_dataframe().T])
         if print_mode == "full":
-            df = df.sort_values(by=["computing_time"], ascending=[True])
+            df = df.sort_values(**sort_kwargs)
         elif print_mode == "parameters":
-            df = df.drop(columns=["result_value"]).sort_values(by=["computing_time"], ascending=[True])
+            df = df.drop(columns=["result_value"]).sort_values(**sort_kwargs)
         else:
             raise ValueError(f"print_mode must be either 'full' or 'parameters', but got {print_mode}")
         return df
@@ -610,12 +634,10 @@ class TwoSampleTestBase(ABC):
     """
     def __init__(self, 
                  data_input: TwoSampleTestInputs,
-                 method: str = "paired",
                  progress_bar: bool = False,
                  verbose: bool = False
                 ) -> None:
         self.Inputs: TwoSampleTestInputs = data_input
-        self.method: str = method
         self.progress_bar: bool = progress_bar
         self.verbose: bool = verbose
         self._start: float = 0.
@@ -635,21 +657,6 @@ class TwoSampleTestBase(ABC):
             self._Inputs: TwoSampleTestInputs = Inputs
         else:
             raise TypeError(f"Inputs must be of type TwoSampleTestInputs, but got {type(Inputs)}")
-    
-    @property
-    def method(self) -> str: # type: ignore
-        return self._method
-    
-    @method.setter
-    def method(self,  # type: ignore
-               method: str) -> None:
-        if isinstance(method, str):
-            if method in ["paired", "crossed"]:
-                self._method: str = method
-            else:
-                raise ValueError(f"method must be either 'paired' or 'crossed', but got {method}")
-        else:
-            raise TypeError(f"method must be of type str, but got {type(method)}")
         
     @property
     def progress_bar(self) -> bool: # type: ignore
@@ -661,7 +668,7 @@ class TwoSampleTestBase(ABC):
         if isinstance(progress_bar, bool):
             self._progress_bar: bool = progress_bar
             if self.Inputs.use_tf and self.progress_bar:
-                self._progress_bar: bool = False
+                self._progress_bar = False
                 print("progress_bar is disabled when using tensorflow mode.")
         else:
             raise TypeError(f"progress_bar must be of type bool, but got {type(progress_bar)}")
@@ -713,82 +720,37 @@ class TwoSampleTestBase(ABC):
     def small_sample(self) -> bool:
         return self.Inputs.small_sample
             
-    def get_niter_batch_size_np(self,
-                                method: str = "paired",
-                               ) -> Tuple[int, int]:
+    def get_niter_batch_size_np(self) -> Tuple[int, int]:
         nsamples = self.Inputs.nsamples
         batch_size = self.Inputs.batch_size
         niter = self.Inputs.niter
-        if method == "paired":
-            niter_paired = niter
-            if nsamples < batch_size * niter_paired:
-                batch_size_paired = nsamples // niter_paired
-            else:
-                batch_size_paired = batch_size
-            if batch_size_paired == 0:
-                raise ValueError("batch_size should be positive integer and number of samples should be larger than number of iterations.")
-            return niter_paired, batch_size_paired
-        elif method == "crossed":
-            niter_crossed = int(np.floor(np.sqrt(niter)))
-            if nsamples < batch_size * niter_crossed:
-                batch_size_crossed = nsamples // niter_crossed
-            else:
-                batch_size_crossed = batch_size
-            if batch_size_crossed == 0:
-                raise ValueError("batch_size should be positive integer and number of samples should be larger than number of iterations.")
-            return niter_crossed, batch_size
+        if nsamples < batch_size * niter:
+            batch_size = nsamples // niter
         else:
-            raise ValueError("method should be 'paired' or 'crossed'.")
+            pass
+        if batch_size == 0:
+            raise ValueError("batch_size should be positive integer and number of samples should be larger than number of iterations.")
+        return niter, batch_size
     
-    def get_niter_batch_size_tf(self, 
-                                method: str = "paired"
-                               ) -> Tuple[tf.Tensor, tf.Tensor]:
+    def get_niter_batch_size_tf(self) -> Tuple[tf.Tensor, tf.Tensor]:
         nsamples: tf.Tensor = tf.cast(self.Inputs.nsamples, dtype = tf.int32) # type: ignore
         batch_size: tf.Tensor = tf.cast(self.Inputs.batch_size, dtype = tf.int32) # type: ignore
         niter: tf.Tensor = tf.cast(self.Inputs.niter, dtype = tf.int32) # type: ignore
-
-        def paired_method() -> Tuple[tf.Tensor, tf.Tensor]:
-            niter_paired: tf.Tensor = tf.cast(niter, dtype = tf.int32) # type: ignore
-            batch_size_tmp = tf.cond(nsamples < batch_size * niter_paired,
-                                        true_fn=lambda: nsamples // niter_paired,
-                                        false_fn=lambda: batch_size)
-            batch_size_paired: tf.Tensor = tf.cast(batch_size_tmp, dtype = tf.int32) # type: ignore
-            tf.debugging.assert_positive(batch_size_paired,
-                                         message="batch_size should be positive integer and number of samples should be larger than number of iterations.")
-            return niter_paired, batch_size_paired
-
-        def crossed_method() -> Tuple[tf.Tensor, tf.Tensor]:
-            niter_crossed: tf.Tensor = tf.cast(tf.floor(tf.sqrt(tf.cast(niter, tf.float32))), tf.int32) # type: ignore
-            batch_size_tmp = tf.cond(nsamples < batch_size * niter_crossed,
-                                         true_fn=lambda: nsamples // niter_crossed,
-                                         false_fn=lambda: batch_size)
-            batch_size_crossed: tf.Tensor = tf.cast(batch_size_tmp, dtype = tf.int32) # type: ignore
-            tf.debugging.assert_positive(batch_size_crossed,
-                                         message="batch_size should be positive integer and number of samples should be larger than number of iterations.")
-            return niter_crossed, batch_size_crossed
-
-        result = tf.cond(tf.equal(method, "paired"),
-                         true_fn=paired_method,
-                         false_fn=crossed_method)
-        result_0: tf.Tensor = tf.cast(result[0], dtype = tf.int32) # type: ignore
-        result_1: tf.Tensor = tf.cast(result[1], dtype = tf.int32) # type: ignore
-
-        return result_0, result_1
+        batch_size_tmp = tf.cond(nsamples < batch_size * niter,
+                                    true_fn=lambda: nsamples // niter,
+                                    false_fn=lambda: batch_size)
+        batch_size: tf.Tensor = tf.cast(batch_size_tmp, dtype = tf.int32) # type: ignore
+        tf.debugging.assert_positive(batch_size, message="batch_size should be positive integer and number of samples should be larger than number of iterations.")
+        return niter, batch_size
 
     @property
     def param_dict(self) -> Dict[str, Any]:
         if self.Inputs.use_tf:
-            niter, batch_size = self.get_niter_batch_size_np(method = self.method)
+            niter, batch_size = self.get_niter_batch_size_np()
         else:
-            niter, batch_size = self.get_niter_batch_size_tf(method = self.method)
+            niter, batch_size = self.get_niter_batch_size_tf()
         output_dict = self.Inputs.param_dict
-        output_dict["method"] = self.method
-        if self.method == "paired":
-            niter_used = niter
-        elif self.method == "crossed":
-            niter_used = niter ** 2
-        else:
-            raise ValueError("method should be 'paired' or 'crossed'.")
+        niter_used = niter
         output_dict["niter_used"] = int(niter_used)
         output_dict["batch_size_used"] = int(batch_size)
         output_dict["computing_time"] = self.get_computing_time()
