@@ -12,12 +12,13 @@ import os
 import inspect
 import numpy as np
 import random
+from scipy.stats import moment # type: ignore
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
 from numpy import random as npr
 
-from typing import Tuple, Union, Optional, Type, TypeAlias, TypeVar, Callable, Dict
+from typing import Tuple, Union, Optional, Type, Callable, Dict
 from numpy import typing as npt
 # For future tensorflow typing support
 #import tensorflow.python.types.core as tft
@@ -115,7 +116,7 @@ def conditional_print(verbose: bool = False,
         print(*args)
 
 @tf.function
-def conditional_tf_print(verbose: tf.Tensor = tf.Tensor(False),
+def conditional_tf_print(verbose: tf.Tensor = tf.convert_to_tensor(False),
                          *args) -> None:
     tf.cond(tf.equal(verbose, True), lambda: tf.print(*args), lambda: verbose)
 
@@ -193,262 +194,17 @@ def parse_input_dist_tf(dist_input: DataDistType,
         (is_distribution(), handle_distribution),
         (is_ndarray_or_tensor(), handle_ndarray_or_tensor)
     ], default=handle_else, exclusive=True)
-    
-@tf.function#(jit_compile=True)
-def ks_2samp_tf(data1: tf.Tensor, 
-                data2: tf.Tensor,
-                alternative: str = 'two-sided',
-                method: str = 'auto',
-                precision: int = 100,
-                verbose: bool = False,
-                debug: bool = False
-               ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-    """
-    Compute the Kolmogorov-Smirnov statistic on 2 samples.
-
-    This is a two-sided test for the null hypothesis that 2 independent samples
-    are drawn from the same continuous distribution. 
-
-    Parameters:
-    data1, data2: tf.Tensor
-        Two arrays of sample observations assumed to be drawn from a continuous
-        distribution, sample sizes can be different.
-        
-    alternative: str, optional
-        Defines the alternative hypothesis.
-        The following options are available (default is 'two-sided'):
-        - 'two-sided'
-        - 'less': one-sided, see explanation in scipy.stats.ks_2samp function
-        - 'greater': one-sided, see explanation in scipy.stats.ks_2samp function
-
-    method: str, optional
-        Defines the method used for calculating the p-value.
-        The following options are available (default is 'auto'):
-        - 'auto': use 'exact' for small size arrays, 'asymp' for larger
-        - 'exact': use exact distribution of test statistic
-        - 'asymp': use asymptotic distribution of test statistic
-
-    Returns: 
-    d: tf.Tensor
-        KS statistic.
-
-    prob: tf.Tensor
-        Two-tailed p-value.
-
-    d_location: tf.Tensor
-        The x-location of the maximum difference of the cumulative distribution function.
-
-    Note: The 'exact' method is not yet implemented. If selected, the function 
-    will fall back to 'asymp'. 
-    """
-    if alternative not in ['two-sided', 'less', 'greater']:
-        raise ValueError("Invalid alternative.")
-    if method not in ['auto', 'exact', 'asymp']:
-        raise ValueError("Invalid method.")
-    alternative_dict: Dict[str,int] = {'two-sided': 0, 'less': 1, 'greater': 2}
-    method_dict: Dict[str,int] = {'auto': 0, 'exact': 1, 'asymp': 2}
-    
-    # Convert string input to integer codes.
-    alternative_int: int = alternative_dict.get(alternative, 0)
-    method_int: int = method_dict.get(method, 0)
-    d: tf.Tensor
-    prob: tf.Tensor
-    d_location: tf.Tensor
-    d, prob, d_location = _ks_2samp_tf_internal(data1 = data1, 
-                                                data2 = data2, 
-                                                alternative_int = alternative_int, 
-                                                method_int = method_int,
-                                                precision = precision,
-                                                verbose = verbose,
-                                                debug = debug) # type: ignore
-    return d, prob, d_location
-    
-        
-def _ks_2samp_tf_internal(data1: tf.Tensor, 
-                          data2: tf.Tensor,
-                          #n1: tf.Tensor,
-                          #n2: tf.Tensor,
-                          #g: tf.Tensor,
-                          #n1g: tf.Tensor,
-                          #n2g: tf.Tensor,
-                          alternative_int: int = 0,
-                          method_int: int = 0,
-                          precision: int = 100,
-                          verbose: bool = False,
-                          debug: bool = False
-                         ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-    """
-    alternative_dict = {'two-sided': 0, 'less': 1, 'greater': 2}
-    method_dict = {'auto': 0, 'exact': 1, 'asymp': 2}
-    """
-    #alternative: tf.Tensor = tf.convert_to_tensor(alternative_int, dtype=tf.int32)
-    #method: tf.Tensor = tf.convert_to_tensor(method_int, dtype=tf.int32)
-    alternative: int = alternative_int
-    method: int = method_int
-    mode: int = method
-    #if debug:
-    #    # Check the correct alternatives
-    #    tf.debugging.assert_less_equal(alternative, 2, "Invalid alternative.")
-    #    tf.debugging.assert_greater_equal(alternative, 0, "Invalid alternative.")
-    #    # Check the correct methods
-    #    tf.debugging.assert_less_equal(mode, 2, "Invalid method.")
-    #    tf.debugging.assert_greater_equal(mode, 0, "Invalid method.")
-    #    # Check the correct input dimensions
-    #    tf.debugging.assert_equal(tf.rank(data1), 1, message="data1 must be 1-dimensional.")
-    #    tf.debugging.assert_equal(tf.rank(data2), 1, message="data2 must be 1-dimensional.")
-    #    # Check that there are no `NaN` or `Inf` values
-    #    tf.debugging.assert_none_equal(tf.math.is_nan(data1), tf.constant(True, dtype=tf.bool), message="data1 must not contain NaN values.")
-    #    tf.debugging.assert_none_equal(tf.math.is_nan(data2), tf.constant(True, dtype=tf.bool), message="data2 must not contain NaN values.")
-    #    tf.debugging.assert_none_equal(tf.math.is_inf(data1), tf.constant(True, dtype=tf.bool), message="data1 must not contain Inf values.")
-    #    tf.debugging.assert_none_equal(tf.math.is_inf(data2), tf.constant(True, dtype=tf.bool), message="data2 must not contain Inf values.")
-    
-    def greatest_common_divisor_tf(x, y):
-        while tf.not_equal(y, 0):
-            x, y = y, tf.math.floormod(x, y)
-        return x
-
-    MAX_AUTO_N: tf.Tensor = tf.constant(10000, dtype=tf.float32) # type: ignore
-    
-    data1 = tf.sort(data1)
-    data2 = tf.sort(data2)
-    
-    n1: tf.Tensor = tf.cast(tf.shape(data1)[0], tf.float32) # type: ignore
-    n2: tf.Tensor = tf.cast(tf.shape(data2)[0], tf.float32) # type: ignore
-    
-    data_all: tf.Tensor = tf.concat([data1, data2], axis=0) # type: ignore
-
-    # using searchsorted solves equal data problem
-    cdf1: tf.Tensor = tf.cast(tf.searchsorted(data1, data_all, side = 'right'), tf.float32) / n1
-    cdf2: tf.Tensor = tf.cast(tf.searchsorted(data2, data_all, side = 'right'), tf.float32) / n2
-    cddiffs: tf.Tensor = cdf1 - cdf2
-    
-    # Identify the location of the statistic
-    argminS: tf.Tensor = tf.argmin(cddiffs)
-    argmaxS: tf.Tensor = tf.argmax(cddiffs)
-    loc_minS: tf.Tensor = data_all[argminS]
-    loc_maxS: tf.Tensor = data_all[argmaxS]
-    
-    # Ensure sign of minS is not negative.
-    minS: tf.Tensor = tf.clip_by_value(-cddiffs[argminS], clip_value_min = 0, clip_value_max = 1) # type: ignore
-    maxS: tf.Tensor = cddiffs[argmaxS]
-    
-    max_abs_diff: tf.Tensor = tf.maximum(minS, maxS) # type: ignore
-    less_max: tf.Tensor = tf.greater_equal(minS, maxS) # type: ignore
-
-    location: tf.Tensor = tf.where(less_max, loc_minS, loc_maxS)
-    #sign: tf.Tensor = tf.where(less_max, -1, 1)
-    
-    d: tf.Tensor = tf.where(tf.equal(alternative, 0), x=max_abs_diff, y=tf.where(tf.equal(alternative, 1), x=minS, y=maxS))
-    d_location: tf.Tensor = tf.where(tf.equal(alternative, 0), x=location, y=tf.where(tf.equal(alternative, 1), x=loc_minS, y=loc_maxS))
-    #d_sign: tf.Tensor = tf.where(tf.equal(alternative, 0), x=sign, y=tf.where(tf.equal(alternative, 1), x=-1, y=1))
-
-    g: tf.Tensor = greatest_common_divisor_tf(n1, n2)
-    n1g: tf.Tensor = tf.math.floordiv(n1, g) # type: ignore
-    n2g: tf.Tensor = tf.math.floordiv(n2, g) # type: ignore
-    prob: tf.Tensor = -tf.float32.max # type: ignore
-        
-    #def switch_to_asymp_large_sample(n1: tf.Tensor,
-    #                                 n2: tf.Tensor
-    #                                ) -> int:
-    #    conditional_tf_print(tf.constant(verbose), "Exact ks_2samp calculation not possible with sample sizes "+str(n1)+" and "+str(n2)+". Switching to 'asymp' method.")
-    #    result: int = 2
-    #    return result
-    
-    #def switch_to_asymp_not_implemented():
-    #    conditional_tf_print(tf.constant(verbose), "Exact ks_2samp calculation not yet implemented. Switching to 'asymp' method.")
-    #    result: int = 2
-    #    return result
-
-    # If mode is 'auto' (0), decide between 'exact' (1) and 'asymp'  (2) based on n1, n2
-    mode = tf.where(tf.equal(mode, 0),
-                tf.where(tf.less_equal(tf.reduce_max([n1, n2]), MAX_AUTO_N), 
-                         x=1,
-                         y=2),
-                mode)
-
-    
-    # If lcm(n1, n2) is too big, switch from 'exact' (1) to 'asymp' (2)
-    mode = tf.where(tf.logical_and(tf.equal(mode, 1), tf.greater_equal(n1g, tf.int32.max / n2g)),
-                x=2,
-                y=mode)
 
 
-    # Exact calculation is not yet implemented, so switch from 'exact' (1) to 'asymp' (2)
-    mode = tf.where(tf.equal(mode, 1), x=2, y=mode)
-    
-    def asymp_ks_2samp(n1: tf.Tensor,
-                       n2: tf.Tensor,
-                       d: tf.Tensor,
-                       alternative: int,
-                       precision: int
-                      ) -> Tuple[tf.Tensor, tf.Tensor]:
-        #tf.print("Executing asymp_ks_2samp")
-        sorted_values: tf.Tensor = tf.sort(tf.stack([tf.cast(n1, tf.float32), tf.cast(n2, tf.float32)]), direction='DESCENDING')
-        m: tf.Tensor = sorted_values[0]
-        n: tf.Tensor = sorted_values[1]
-        en: tf.Tensor = m * n / (m + n)
-        
-        def kolmogorov_cdf(x: tf.Tensor, 
-                           precision: int
-                          ) -> tf.Tensor:
-            k_values: tf.Tensor = tf.range(-precision, precision + 1, dtype=tf.float32)
-            terms: tf.Tensor = (-1.)**k_values * tf.exp(-2. * k_values**2 * x**2)
-            prob: tf.Tensor = tf.reduce_sum(terms)
-            return prob
-        
-        def two_sided_p_value(d: tf.Tensor,
-                              en: tf.Tensor,
-                              precision: int
-                             ) -> tf.Tensor:
-            z: tf.Tensor = tf.sqrt(en) * d
-            prob: tf.Tensor = 1 - kolmogorov_cdf(z, precision) # type: ignore
-            return prob
+def se_mean(data):
+    n = len(data)
+    mu_2 = moment(data, moment=2)  # second central moment (variance)
+    se_mean = mu_2 / np.sqrt(n)
+    return se_mean
 
-        def one_sided_p_value() -> tf.Tensor:
-            z = tf.sqrt(en) * d
-            expt = -2 * z**2 - 2 * z * (m + 2*n)/tf.sqrt(m*n*(m+n))/3.0
-            prob = tf.exp(expt)
-            return prob
-        
-        prob = tf.where(tf.equal(alternative, 0), x=two_sided_p_value(d, en, precision), y=one_sided_p_value())
-
-        return d, prob
-        
-    #def exact_ks_2samp(n1: tf.Tensor,
-    #                   n2: tf.Tensor,
-    #                   g: tf.Tensor,
-    #                   d: tf.Tensor,
-    #                   alternative: int
-    #                  ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-    #    #conditional_tf_print(tf.constant(verbose), "Exact ks_2samp calculation not yet implemented. Switching to 'asymp' method.")
-    #    success: tf.Tensor = tf.convert_to_tensor(False, tf.bool)
-    #    prob: tf.Tensor = -tf.float32.max # type: ignore
-    #    return success, d, prob
-    #    
-    #def attempt_exact_ks_2samp(n1: tf.Tensor,
-    #                           n2: tf.Tensor,
-    #                           g: tf.Tensor,
-    #                           d: tf.Tensor,
-    #                           alternative: int,
-    #                           precision: int = 1000
-    #                          ) -> Tuple[tf.Tensor, tf.Tensor]:
-    #    success: tf.Tensor
-    #    prob: tf.Tensor
-    #    success, d, prob = exact_ks_2samp(n1, n2, g, d, alternative)
-    #    
-    #    d, prob = tf.cond(tf.equal(success, True),
-    #               true_fn=lambda: (d, prob),
-    #               false_fn=lambda: asymp_ks_2samp(n1, n2, d, alternative, precision))
-    #
-    #    
-    #    return d, prob
-    #
-    #d, prob = tf.cond(tf.equal(mode, 1),
-    #                      true_fn = lambda: attempt_exact_ks_2samp(n1, n2, g, d, alternative, precision),
-    #                      false_fn = lambda: asymp_ks_2samp(n1, n2, d, alternative, precision)) # type: ignore
-    
-    d, prob = asymp_ks_2samp(n1, n2, d, alternative, precision)
-
-    prob = tf.clip_by_value(prob, 0, 1) # type: ignore
-    
-    return d, prob, d_location
+def se_std(data):
+    n = len(data)
+    mu_2 = moment(data, moment=2)  # second central moment (variance)
+    mu_4 = moment(data, moment=4)  # fourth central moment
+    se_std = np.sqrt((mu_4 - mu_2**2) / (4 * mu_2 * n))
+    return se_std

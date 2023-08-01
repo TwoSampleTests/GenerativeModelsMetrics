@@ -340,8 +340,8 @@ class TwoSampleTestInputs(object):
         self._dtype = self.__get_best_dtype(self.dtype_input, self.__get_best_dtype(self.dtype_1, self.dtype_2))
     
     def __check_set_ndims_np(self) -> None:
-        self._ndims_1 = int(self.ndims_1)
-        self._ndims_2 = int(self.ndims_2)
+        self._ndims_1 = int(self.ndims_1) # type: ignore
+        self._ndims_2 = int(self.ndims_2) # type: ignore 
         if not (isinstance(self.ndims_1, int) and isinstance(self.ndims_2, int)):
             raise ValueError("ndims_1 and ndims_2 should be integers when in 'numpy' mode.")
         if self.ndims_1 != self.ndims_2:
@@ -542,11 +542,11 @@ class TwoSampleTestResult:
                  timestamp: str,
                  test_name: str,
                  parameters: Dict[str, Any],
-                 result_value: DataType
+                 result_value: Dict[str, DataType]
                 ) -> None:
         self.timestamp: str = timestamp
         self.test_name: str = test_name
-        self.result_value: DataType = result_value
+        self.result_value: Dict[str, DataType] = result_value
         self.__dict__.update(parameters)
     
     def result_to_dataframe(self):
