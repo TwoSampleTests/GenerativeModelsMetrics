@@ -625,21 +625,26 @@ class KSTest(TwoSampleTestBase):
             dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
                                                true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start), seed = seed_dist_2),
                                                false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
-
-            dist_1_k = tf.reshape(dist_1_k, (batch_size, ndims*(end-start)))
-            dist_2_k = tf.reshape(dist_2_k, (batch_size, ndims*(end-start)))
             
-            # Define the loop body to vectorize over ndims*chunk_size
-            def loop_body_vmap(idx):
-                metric, pvalue, _, _ = ks_2samp_tf(dist_1_k[:, idx], dist_2_k[:, idx], verbose=False) # type: ignore
+            dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims))
+            dist_2_k = tf.reshape(dist_2_k, (end-start, batch_size, ndims))
+                
+            # Define the loop body function
+            def loop_body(args):
+                idx1 = args[0]
+                idx2 = args[1]
+                metric, pvalue, _, _ = ks_2samp_tf(dist_1_k[idx1, :, idx2], dist_2_k[idx1, :, idx2], verbose=False) # type: ignore
                 metric = tf.cast(metric, dtype=dtype)
                 pvalue = tf.cast(pvalue, dtype=dtype)
-                
                 return metric, pvalue
-
-            # Vectorize over ndims*chunk_size
-            statistic_lists, pvalue_lists = tf.vectorized_map(loop_body_vmap, tf.range(ndims*(end-start))) # type: ignore
-
+            
+            # Create the range of indices for both loops
+            indices = tf.stack(tf.meshgrid(tf.range(end-start), tf.range(ndims), indexing='ij'), axis=-1)
+            indices = tf.reshape(indices, [-1, 2])
+            
+            # Use tf.vectorized_map to iterate over the indices
+            statistic_lists, pvalue_lists = tf.vectorized_map(loop_body, indices) # type: ignore
+            
             # Reshape the results back to (chunk_size, ndims)
             statistic_lists = tf.reshape(statistic_lists, (end-start, ndims))
             pvalue_lists = tf.reshape(pvalue_lists, (end-start, ndims))
@@ -721,14 +726,14 @@ class KSTest(TwoSampleTestBase):
                              
         end_calculation()
         
-        timestamp = datetime.now().isoformat()
-        test_name = "KS Test_tf"
-        parameters = {**self.param_dict, **{"backend": "tensorflow"}}
-        result_value = {"statistic_lists": statistic_lists.numpy(),
-                        "statistic_means": statistic_means.numpy(),
-                        "statistic_stds": statistic_stds.numpy(),
-                        "pvalue_lists": pvalue_lists.numpy(),
-                        "pvalue_means": pvalue_means.numpy(),
-                        "pvalue_stds": pvalue_stds.numpy()}
-        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
+        timestamp: str = datetime.now().isoformat()
+        test_name: str = "KS Test_np"
+        parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}}
+        result_value: Dict[str, DataTypeNP] = {"statistic_lists": statistic_lists.numpy(),
+                                               "statistic_means": statistic_means.numpy(),
+                                               "statistic_stds": statistic_stds.numpy(),
+                                               "pvalue_lists": pvalue_lists.numpy(),
+                                               "pvalue_means": pvalue_means.numpy(),
+                                               "pvalue_stds": pvalue_stds.numpy()}
+        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
         self.Results.append(result)

@@ -163,11 +163,11 @@ class SWDMetric(TwoSampleTestBase):
     Methods:
     -------
     compute(nslices: int = 100) -> None
-        Compute the sliced Wasserstein distance between the two samples
+        Function that computes the sliced Wasserstein distance between the two samples
         selecting among the Test_np and Test_tf methods depending on the value of the use_tf attribute.
         
     Test_np(nslices: int = 100) -> None
-        Compute the sliced Wasserstein distance between the two samples using numpy functions.
+        Function that computes the sliced Wasserstein distance between the two samples using numpy functions.
         The number of random directions used for the projection is given by nslices.
         The calculation is performed in batches of size batch_size.
         The number of batches is niter.
@@ -175,7 +175,7 @@ class SWDMetric(TwoSampleTestBase):
         The results are stored in the Results attribute.
         
     Test_tf(nslices: int = 100) -> None
-        Compute the sliced Wasserstein distance between the two samples using tensorflow functions.
+        Function that computes the sliced Wasserstein distance between the two samples using tensorflow functions.
         The number of random directions used for the projection is given by nslices.
         The calculation is performed in batches of size batch_size.
         The number of batches is niter.
@@ -377,8 +377,8 @@ class SWDMetric(TwoSampleTestBase):
         timestamp: str = datetime.now().isoformat()
         test_name: str = "SWD Test_np"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "numpy"}}
-        result_value: Dict[str, DataTypeTF] = {"metric_lists": np.array(metric_lists),
-                                               "metric_means": np.array(metric_means),
+        result_value: Dict[str, DataTypeTF] = {"metric_lists": np.array(metric_lists), # type: ignore
+                                               "metric_means": np.array(metric_means), # type: ignore
                                                "metric_stds": np.array(metric_stds)} # type: ignore
         result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
         self.Results.append(result)
@@ -506,10 +506,10 @@ class SWDMetric(TwoSampleTestBase):
                              
         end_calculation()
         
-        timestamp = datetime.now().isoformat()
-        test_name = "SWD Test_tf"
-        parameters = {**self.param_dict, **{"backend": "tensorflow"}}
-        result_value = {"metric_lists": swd_lists.numpy(),
+        timestamp: str = datetime.now().isoformat()
+        test_name: str = "SWD Test_tf"
+        parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}}
+        result_value: Dict[str, Any] = {"metric_lists": swd_lists.numpy(),
                         "metric_means": swd_means.numpy(),
                         "metric_stds": swd_stds.numpy()}
         result = TwoSampleTestResult(timestamp, test_name, parameters, result_value)

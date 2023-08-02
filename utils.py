@@ -115,8 +115,8 @@ def conditional_print(verbose: bool = False,
     if verbose:
         print(*args)
 
-@tf.function
-def conditional_tf_print(verbose: tf.Tensor = tf.convert_to_tensor(False),
+#@tf.function(reduce_retracing = True)
+def conditional_tf_print(verbose: bool = False,
                          *args) -> None:
     tf.cond(tf.equal(verbose, True), lambda: tf.print(*args), lambda: verbose)
 
