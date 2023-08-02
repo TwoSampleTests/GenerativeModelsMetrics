@@ -259,6 +259,7 @@ class FNMetric(TwoSampleTestBase):
         
         # Utility functions
         def start_calculation() -> None:
+            conditional_print(self.verbose, "\n------------------------------------------")
             conditional_print(self.verbose, "Starting FN metric calculation...")
             conditional_print(self.verbose, "niter = {}" .format(niter))
             conditional_print(self.verbose, "batch_size = {}" .format(batch_size))
@@ -355,6 +356,7 @@ class FNMetric(TwoSampleTestBase):
         
         # Utility functions
         def start_calculation() -> None:
+            conditional_tf_print(self.verbose, "\n------------------------------------------")
             conditional_tf_print(self.verbose, "Starting FN metric calculation...")
             conditional_tf_print(self.verbose, "Running TF FN calculation...")
             conditional_tf_print(self.verbose, "niter =", niter)
@@ -406,7 +408,6 @@ class FNMetric(TwoSampleTestBase):
         
         @tf.function(reduce_retracing=True)
         def compute_test(max_vectorize: int = int(1e6)) -> tf.Tensor:
-            conditional_tf_print(self.verbose, "Running compute_test")
             max_vectorize = int(tf.cast(tf.maximum(max_vectorize, ndims),tf.int32)) # type: ignore
             max_iter_per_chunk: int = int(tf.cast(tf.math.floor(max_vectorize / ndims), tf.int32)) # type: ignore
             nchunks: int = int(tf.cast(tf.math.ceil(niter / max_iter_per_chunk), tf.int32)) # type: ignore

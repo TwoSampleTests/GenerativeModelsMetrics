@@ -469,6 +469,7 @@ class KSTest(TwoSampleTestBase):
         
         # Utility functions
         def start_calculation() -> None:
+            conditional_print(self.verbose, "\n------------------------------------------")
             conditional_print(self.verbose, "Starting KS tests calculation...")
             conditional_print(self.verbose, "niter = {}" .format(niter))
             conditional_print(self.verbose, "batch_size = {}" .format(batch_size))
@@ -588,6 +589,7 @@ class KSTest(TwoSampleTestBase):
         
         # Utility functions
         def start_calculation() -> None:
+            conditional_tf_print(self.verbose, "\n------------------------------------------")
             conditional_tf_print(self.verbose, "Starting KS tests calculation...")
             conditional_tf_print(self.verbose, "Running TF KS tests...")
             conditional_tf_print(self.verbose, "niter =", niter)
@@ -666,7 +668,6 @@ class KSTest(TwoSampleTestBase):
 
         @tf.function(reduce_retracing=True)
         def compute_test(max_vectorize: int = int(1e6)) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
-            conditional_tf_print(self.verbose, "Running compute_test")
             # Check if numerical distributions are empty and print a warning if so
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore

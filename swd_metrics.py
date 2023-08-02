@@ -312,6 +312,7 @@ class SWDMetric(TwoSampleTestBase):
         
         # Utility functions
         def start_calculation() -> None:
+            conditional_print(self.verbose, "\n------------------------------------------")
             conditional_print(self.verbose, "Starting SWD metric calculation...")
             conditional_print(self.verbose, "niter = {}" .format(niter))
             conditional_print(self.verbose, "batch_size = {}" .format(batch_size))
@@ -423,6 +424,7 @@ class SWDMetric(TwoSampleTestBase):
         
         # Utility functions
         def start_calculation() -> None:
+            conditional_tf_print(self.verbose, "\n------------------------------------------")
             conditional_tf_print(self.verbose, "Starting SWD metric calculation...")
             conditional_tf_print(self.verbose, "Running TF SWD calculation...")
             conditional_tf_print(self.verbose, "niter =", niter)
@@ -447,8 +449,6 @@ class SWDMetric(TwoSampleTestBase):
             
         @tf.function(reduce_retracing=True)
         def compute_test() -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-            conditional_tf_print(self.verbose, "Running compute_test")
-    
             # Initialize the result TensorArray
             res = tf.TensorArray(dtype, size = niter)
             res_swd_mean = tf.TensorArray(dtype, size = niter)
