@@ -115,23 +115,21 @@ class FNMetric(TwoSampleTestBase):
         
     Methods:
     -------
-    compute(nslices: int = 100) -> None
+    compute() -> None
         Function that computes the Frobenius norm between the correlation matrices of the two samples
         selecting among the Test_np and Test_tf methods depending on the value of the use_tf attribute.
         
-    Test_np(nslices: int = 100) -> None
+    Test_np() -> None
         Function that computes the Frobenius norm between the correlation matrices 
         of the two samples using numpy functions.
-        The number of random directions used for the projection is given by nslices.
         The calculation is performed in batches of size batch_size.
         The number of batches is niter.
         The total number of samples is niter*batch_size.
         The results are stored in the Results attribute.
         
-    Test_tf(nslices: int = 100) -> None
+    Test_tf() -> None
         Function that computes the Frobenius norm between the correlation matrices
         of the two samples using tensorflow functions.
-        The number of random directions used for the projection is given by nslices.
         The calculation is performed in batches of size batch_size.
         The number of batches is niter.
         The total number of samples is niter*batch_size.
@@ -175,7 +173,7 @@ class FNMetric(TwoSampleTestBase):
         FN_metric = GMetrics.FNMetric(data_input = data_input, 
                                         progress_bar = True, 
                                         verbose = True)
-        FN_metric.compute(max_vectorize = int(1e6))
+        FN_metric.compute()
         FN_metric.Results[0].result_value
         
         >> {'metric_list': [...]}
@@ -337,8 +335,14 @@ class FNMetric(TwoSampleTestBase):
         None
         """
         # Set alias for inputs
-        dist_1_num: tf.Tensor = self.Inputs.dist_1_num
-        dist_2_num: tf.Tensor = self.Inputs.dist_2_num
+        if isinstance(self.Inputs.dist_1_num, np.ndarray):
+            dist_1_num: tf.Tensor = tf.convert_to_tensor(self.Inputs.dist_1_num)
+        else:
+            dist_1_num = self.Inputs.dist_1_num # type: ignore
+        if isinstance(self.Inputs.dist_2_num, np.ndarray):
+            dist_2_num: tf.Tensor = tf.convert_to_tensor(self.Inputs.dist_2_num)
+        else:
+            dist_2_num = self.Inputs.dist_2_num # type: ignore
         if isinstance(self.Inputs.dist_1_symb, tfp.distributions.Distribution):
             dist_1_symb: tfp.distributions.Distribution = self.Inputs.dist_1_symb
         else:

@@ -405,8 +405,14 @@ class SWDMetric(TwoSampleTestBase):
         None
         """
         # Set alias for inputs
-        dist_1_num: tf.Tensor = self.Inputs.dist_1_num
-        dist_2_num: tf.Tensor = self.Inputs.dist_2_num
+        if isinstance(self.Inputs.dist_1_num, np.ndarray):
+            dist_1_num: tf.Tensor = tf.convert_to_tensor(self.Inputs.dist_1_num)
+        else:
+            dist_1_num = self.Inputs.dist_1_num # type: ignore
+        if isinstance(self.Inputs.dist_2_num, np.ndarray):
+            dist_2_num: tf.Tensor = tf.convert_to_tensor(self.Inputs.dist_2_num)
+        else:
+            dist_2_num = self.Inputs.dist_2_num # type: ignore
         if isinstance(self.Inputs.dist_1_symb, tfp.distributions.Distribution):
             dist_1_symb: tfp.distributions.Distribution = self.Inputs.dist_1_symb
         else:

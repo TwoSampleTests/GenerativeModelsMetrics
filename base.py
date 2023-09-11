@@ -13,11 +13,13 @@ from tensorflow_probability import distributions as tfd
 import traceback
 from timeit import default_timer as timer
 from tqdm import tqdm # type: ignore
+from . import utils
 from .utils import reset_random_seeds
 from .utils import parse_input_dist_np
 from .utils import parse_input_dist_tf
 from .utils import get_best_dtype_np
 from .utils import get_best_dtype_tf
+from .utils import generate_and_clean_data
 from .utils import NumpyDistribution
 from dataclasses import dataclass
 
@@ -374,8 +376,6 @@ class TwoSampleTestInputs(object):
             self.__check_set_ndims_np()
             
     def __check_set_nsamples_np(self) -> None:
-        self._nsamples_1 = int(self.nsamples_1)
-        self._nsamples_2 = int(self.nsamples_2)
         if not (isinstance(self.nsamples_1, int) and isinstance(self.nsamples_2, int)):
             raise ValueError("nsamples_1 and nsamples_2 should be integers when in 'numpy' mode.")
         if self.nsamples_1 != 0 and self.nsamples_2 != 0:
@@ -470,12 +470,12 @@ class TwoSampleTestInputs(object):
         def set_dist_num_from_symb(dist: tfp.distributions.Distribution,
                                    seed: int = 0) -> tf.Tensor:
             if isinstance(dist, tfp.distributions.Distribution):
-                dist_num: tf.Tensor = tf.cast(dist.sample(self.nsamples, seed = int(seed)), dtype = self.dtype) # type: ignore
+                dist_num: tf.Tensor = generate_and_clean_data(dist, self.nsamples, self.nsamples, dtype = self.dtype, seed = int(seed), mirror_strategy = False) # type: ignore
             else:
                 raise ValueError("dist should be an instance of tfp.distributions.Distribution.")
             return dist_num
         
-        def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
+        def return_dist_num(dist_num: DataType) -> tf.Tensor:
             if isinstance(dist_num, tf.Tensor):
                 return dist_num
             else:
@@ -523,7 +523,7 @@ class TwoSampleTestInputs(object):
         self.__check_set_small_sample()
 
         # Check and set distributions
-        self.__check_set_distributions()
+        self.__check_set_distributions()    
         
     @property
     def param_dict(self) -> Dict[str, Any]:
@@ -535,18 +535,17 @@ class TwoSampleTestInputs(object):
                 "dtype": self.dtype,
                 "small_sample": self.small_sample}
     
-
 @dataclass
 class TwoSampleTestResult:
     def __init__(self,
                  timestamp: str,
                  test_name: str,
                  parameters: Dict[str, Any],
-                 result_value: Dict[str, DataType]
+                 result_value: Dict[str, Optional[DataType]]
                 ) -> None:
         self.timestamp: str = timestamp
         self.test_name: str = test_name
-        self.result_value: Dict[str, DataType] = result_value
+        self.result_value: Dict[str, Optional[DataType]] = result_value
         self.__dict__.update(parameters)
     
     def result_to_dataframe(self):
