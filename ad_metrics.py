@@ -535,10 +535,10 @@ def KS_test_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf
              ) -> Tuple[List[float], List[float]]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             if verbose:
-                print("Total number of tests ",nn," < 1e8. Using the fastest KS_test_1_small.")
+                print("Total number of tests ",nn," < 1e7. Using the fastest KS_test_1_small.")
             return KS_test_1_small(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
         except Exception as e:
             print("Caught an exception in KS_test_1_small. Details:")
@@ -548,7 +548,7 @@ def KS_test_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf
             return KS_test_1_large(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
     else:
         if verbose:
-            print("Total number of tests ",nn," >= 1e8. Using KS_test_1_large.")
+            print("Total number of tests ",nn," >= 1e7. Using KS_test_1_large.")
         return KS_test_1_large(dist_1_input, dist_2_input, niter, batch_size, use_tf, verbose, progress_bar)
     
 
@@ -817,10 +817,10 @@ def KS_test_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf
              ) -> Tuple[List[float], List[float]]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             if verbose:
-                print("Total number of tests ",nn," < 1e8. Using the fastest KS_test_2_small.")
+                print("Total number of tests ",nn," < 1e7. Using the fastest KS_test_2_small.")
             return KS_test_2_small(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
         except Exception as e:
             print("Caught an exception in KS_test_2_small. Details:")
@@ -830,7 +830,7 @@ def KS_test_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf
             return KS_test_2_large(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
     else:
         if verbose:
-            print("Total number of tests ",nn," >= 1e8. Using KS_test_2_large.")
+            print("Total number of tests ",nn," >= 1e7. Using KS_test_2_large.")
         return KS_test_2_large(dist_1_input, dist_2_input, niter, batch_size, dtype_input, use_tf, verbose, progress_bar)
     
 
@@ -1062,7 +1062,7 @@ def AD_test_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf
              ) -> Tuple[List[float], List[float]]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return AD_test_1_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
@@ -1314,7 +1314,7 @@ def AD_test_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf
              ) -> Tuple[List[float], List[float]]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return AD_test_2_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
@@ -1550,7 +1550,7 @@ def FN_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tens
         ) -> List[float]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return FN_1_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
@@ -1802,7 +1802,7 @@ def FN_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tens
         ) -> List[float]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return FN_2_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
@@ -2030,7 +2030,7 @@ def WD_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tens
         ) -> List[float]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return WD_1_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
@@ -2274,7 +2274,7 @@ def WD_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Tens
         ) -> List[float]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return WD_2_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
@@ -2518,7 +2518,7 @@ def SWD_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Ten
          ) -> List[float]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return SWD_1_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
@@ -2736,7 +2736,7 @@ def SWD_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribution, tf.Ten
          ) -> List[float]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return SWD_2_small(dist_1_input, dist_2_input, niter, batch_size, verbose, progress_bar)
         except:
@@ -2961,7 +2961,7 @@ def ComputeMetrics_1(dist_1_input: Union[np.ndarray, tfp.distributions.Distribut
                     ) -> Tuple[List[float],...]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return ComputeMetrics_1_small(dist_1_input, dist_2_input, niter, batch_size, nslices, seed, verbose, progress_bar)
         except:
@@ -3202,7 +3202,7 @@ def ComputeMetrics_2(dist_1_input: Union[np.ndarray, tfp.distributions.Distribut
                     ) -> Tuple[List[float],...]:
     _, _, ndims, _, _ = __parse_input_dist(dist_1_input, verbose = verbose)
     nn: int = batch_size*niter*ndims
-    if nn < 1e8:
+    if nn < 1e7:
         try:
             return ComputeMetrics_2_small(dist_1_input, dist_2_input, niter, batch_size, nslices, seed, verbose, progress_bar)
         except:

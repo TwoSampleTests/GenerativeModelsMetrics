@@ -38,6 +38,7 @@ class TwoSampleTestInputs(object):
                  dtype_input: DTypeType = np.float32,
                  seed_input: Optional[int] = None,
                  use_tf: bool = False,
+                 mirror_strategy: bool = False,
                  verbose: bool = False,
                 ) -> None:
         # Attributes from arguments
@@ -67,7 +68,7 @@ class TwoSampleTestInputs(object):
         self._small_sample: bool
         
         # Preprocessing
-        self.__preprocess(verbose = self.verbose)
+        self.__preprocess(mirror_strategy = mirror_strategy, verbose = verbose)
             
     @property
     def dist_1_input(self) -> DataDistType:
@@ -282,10 +283,10 @@ class TwoSampleTestInputs(object):
             raise TypeError("small_sample must be a bool or tf.Tensor with numpy() method returning a np.bool_")
         self.__check_set_distributions()
         if self.small_sample:
-            if not (self.batch_size*self.niter*self.ndims <= 1e8 or self.nsamples*self.ndims <= 1e8):
+            if not (self.batch_size*self.niter*self.ndims <= 1e7 or self.nsamples*self.ndims <= 1e7):
                 print("Warning: small_sample is set to True, but the number of samples is large. This may cause memory issues.")
         if not self.small_sample:
-            if self.batch_size*self.niter*self.ndims <= 1e8 or self.nsamples*self.ndims <= 1e8:
+            if self.batch_size*self.niter*self.ndims <= 1e7 or self.nsamples*self.ndims <= 1e7:
                 print("Warning: small_sample is set to False, but the number of samples is small. Setting small_sample to True may speed up calculations.")
                         
     def __parse_input_dist(self,
@@ -411,7 +412,7 @@ class TwoSampleTestInputs(object):
             self.__check_set_nsamples_np()
             
     def __check_set_small_sample_np(self) -> None:
-        if self.batch_size*self.niter*self.ndims <= 1e8 or self.nsamples*self.ndims <= 1e8:
+        if self.batch_size*self.niter*self.ndims <= 1e7 or self.nsamples*self.ndims <= 1e7:
             self.small_sample = True
         else:
             self.small_sample = False
@@ -420,8 +421,8 @@ class TwoSampleTestInputs(object):
         # Utility functions
         def set_small_sample(value: bool) -> None:
             self.small_sample = value
-        tf.cond(tf.logical_or(tf.less_equal(self.batch_size*self.niter*self.ndims, tf.constant(1e8)), 
-                              tf.less_equal(self.nsamples*self.ndims, tf.constant(1e8))),
+        tf.cond(tf.logical_or(tf.less_equal(self.batch_size*self.niter*self.ndims, tf.constant(1e7)), 
+                              tf.less_equal(self.nsamples*self.ndims, tf.constant(1e7))),
                 true_fn = lambda: set_small_sample(True),
                 false_fn = lambda: set_small_sample(False))
         
@@ -465,12 +466,13 @@ class TwoSampleTestInputs(object):
             else:  
                 raise ValueError("dist_2_num should be an instance of np.ndarray or tf.Tensor.")
             
-    def __check_set_distributions_tf(self) -> None:
+    def __check_set_distributions_tf(self,
+                                     mirror_strategy: bool = False) -> None:
         # Utility functions
         def set_dist_num_from_symb(dist: tfp.distributions.Distribution,
                                    seed: int = 0) -> tf.Tensor:
             if isinstance(dist, tfp.distributions.Distribution):
-                dist_num: tf.Tensor = generate_and_clean_data(dist, self.nsamples, self.nsamples, dtype = self.dtype, seed = int(seed), mirror_strategy = False) # type: ignore
+                dist_num: tf.Tensor = generate_and_clean_data(dist, self.nsamples, self.nsamples, dtype = self.dtype, seed = int(seed), mirror_strategy = mirror_strategy) # type: ignore
             else:
                 raise ValueError("dist should be an instance of tfp.distributions.Distribution.")
             return dist_num
@@ -497,13 +499,16 @@ class TwoSampleTestInputs(object):
         self._dist_1_num = tf.cast(dist_1_num, self.dtype)[:self.nsamples, :] # type: ignore
         self._dist_2_num = tf.cast(dist_2_num, self.dtype)[:self.nsamples, :] # type: ignore
         
-    def __check_set_distributions(self) -> None:
+    def __check_set_distributions(self,
+                                  mirror_strategy: bool = False) -> None:
         if self.use_tf:
-            self.__check_set_distributions_tf()
+            self.__check_set_distributions_tf(mirror_strategy = mirror_strategy)
         else:
             self.__check_set_distributions_np()
         
-    def __preprocess(self, verbose: bool = False) -> None:
+    def __preprocess(self, 
+                     mirror_strategy: bool = False,
+                     verbose: bool = False) -> None:
         # Reset random seeds
         reset_random_seeds(seed = self.seed)
         
@@ -523,7 +528,7 @@ class TwoSampleTestInputs(object):
         self.__check_set_small_sample()
 
         # Check and set distributions
-        self.__check_set_distributions()    
+        self.__check_set_distributions(mirror_strategy = mirror_strategy) 
         
     @property
     def param_dict(self) -> Dict[str, Any]:

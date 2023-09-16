@@ -195,23 +195,24 @@ class FNMetric(TwoSampleTestBase):
         super().__init__(data_input = data_input, 
                          progress_bar = progress_bar,
                          verbose = verbose)
-        
-    def compute(self) -> None:
+            
+    def compute(self, max_vectorize: int = 100) -> None:
         """
         Function that computes the Frobenius norm between the correlation matrices of the two samples
         selecting among the Test_np and Test_tf methods depending on the value of the use_tf attribute.
-
+        
         Parameters:
-        -----------
-        None
+        ----------
+        max_vectorize: int, optional, default = 100
+            Maximum number of samples that can be processed by the tensorflow backend.
+            If None, the total number of samples is not checked.
 
         Returns:
-        --------
+        -------
         None
-
         """
         if self.use_tf:
-            self.Test_tf()
+            self.Test_tf(max_vectorize = max_vectorize)
         else:
             self.Test_np()
     
@@ -315,20 +316,23 @@ class FNMetric(TwoSampleTestBase):
         result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
         self.Results.append(result)
         
-    def Test_tf(self) -> None:
+    def Test_tf(self, max_vectorize: int = 100) -> None:
         """
         Function that computes the Frobenuis norm between the correlation matrices 
         of the two samples using tensorflow functions.
-        The number of random directions used for the projection is given by nslices.
         The calculation is performed in batches of size batch_size.
         The number of batches is niter.
         The total number of samples is niter*batch_size.
+        The calculation is parallelized over max_vectorize (out of niter).
         The results are stored in the Results attribute.
-        
+
         Parameters:
-        -----------
-        nslices: int, optional, default = 100
-            Number of random directions to use for the projection.
+        ----------
+        max_vectorize: int, optional, default = 100
+            A maximum number of batch_size*max_vectorize samples per time are processed by the tensorflow backend.
+            Given a value of max_vectorize, the niter FN calculations are split in chunks of max_vectorize.
+            Each chunk is processed by the tensorflow backend in parallel. If ndims is larger than max_vectorize,
+            the calculation is vectorized niter times over ndims.
 
         Returns:
         --------
@@ -411,9 +415,18 @@ class FNMetric(TwoSampleTestBase):
             return frob_norm_list
         
         @tf.function(reduce_retracing=True)
-        def compute_test(max_vectorize: int = int(1e6)) -> tf.Tensor:
+        def compute_test(max_vectorize: int = 100) -> tf.Tensor:
+            # Check if numerical distributions are empty and print a warning if so
+            conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
+            conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
+            
+            # Ensure that max_vectorize is an integer larger than ndims
             max_vectorize = int(tf.cast(tf.maximum(max_vectorize, ndims),tf.int32)) # type: ignore
+
+            # Compute the maximum number of iterations per chunk
             max_iter_per_chunk: int = int(tf.cast(tf.math.floor(max_vectorize / ndims), tf.int32)) # type: ignore
+            
+           # Compute the number of chunks
             nchunks: int = int(tf.cast(tf.math.ceil(niter / max_iter_per_chunk), tf.int32)) # type: ignore
             conditional_tf_print(tf.logical_and(self.verbose,tf.logical_not(tf.equal(nchunks,1))), "nchunks =", nchunks)
 
@@ -434,7 +447,7 @@ class FNMetric(TwoSampleTestBase):
         
         reset_random_seeds(seed = seed)
         
-        frob_norm = compute_test() # type: ignore
+        frob_norm = compute_test(max_vectorize = max_vectorize) # type: ignore
                              
         end_calculation()
         

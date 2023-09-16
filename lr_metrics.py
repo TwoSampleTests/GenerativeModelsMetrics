@@ -474,7 +474,7 @@ class LRMetric(TwoSampleTestBase):
         def start_calculation() -> None:
             conditional_tf_print(self.verbose, "\n------------------------------------------")
             conditional_tf_print(self.verbose, "Starting LR metric calculation...")
-            conditional_tf_print(self.verbose, "Running TF FN calculation...")
+            conditional_tf_print(self.verbose, "Running TF LR calculation...")
             conditional_tf_print(self.verbose, "niter =", niter)
             conditional_tf_print(self.verbose, "batch_size =", batch_size)
             self._start = timer()
@@ -497,6 +497,10 @@ class LRMetric(TwoSampleTestBase):
         
         @tf.function(reduce_retracing=True)
         def compute_test() -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+            # Check if numerical distributions are empty and print a warning if so
+            conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
+            conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
+            
             # Initialize the result TensorArray
             res = tf.TensorArray(dtype, size = niter)
             

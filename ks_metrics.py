@@ -299,15 +299,14 @@ class KSTest(TwoSampleTestBase):
 
     Methods:
     -------
-    compute(max_vectorize: int = int(1e6)) -> None
+    compute(max_vectorize: int = 100) -> None
         Compute the Kolmogorov-Smirnov test-statistic and p-value for two samples.
         If use_tf is True, the calculation is performed using tensorflow functions.
         Otherwise, the calculation is performed using numpy functions.
         The calculation is performed in batches of size batch_size.
         The number of batches is niter.
         The total number of samples is niter*batch_size.
-        The total number of samples must be less than or equal to max_vectorize.
-        If max_vectorize is None, the total number of samples is not checked.
+        The calculation is parallelized over max_vectorize (out of ndims*niter).
         The results are stored in the Results attribute.
 
     Test_np() -> None
@@ -317,13 +316,12 @@ class KSTest(TwoSampleTestBase):
         The total number of samples is niter*batch_size.
         The results are stored in the Results attribute.
 
-    Test_tf(max_vectorize: int = int(1e6)) -> None
+    Test_tf(max_vectorize: int = 100) -> None
         Compute the Kolmogorov-Smirnov test-statistic and p-value for two samples using tensorflow functions.
         The calculation is performed in batches of size batch_size.
         The number of batches is niter.
         The total number of samples is niter*batch_size.
-        The total number of samples must be less than or equal to max_vectorize.
-        If max_vectorize is None, the total number of samples is not checked.
+        The calculation is parallelized over max_vectorize (out of ndims*niter).
         The results are stored in the Results attribute.
 
     get_niter_batch_size_np() -> Tuple[int, int]
@@ -376,7 +374,7 @@ class KSTest(TwoSampleTestBase):
         ks_test = GMetrics.KSTest(data_input = data_input, 
                                   progress_bar = True, 
                                   verbose = True)
-        ks_test.compute(max_vectorize = int(1e6))
+        ks_test.compute(max_vectorize = 100)
         ks_test.Results[0].result_value
         
         >> {'statistic_lists': [[...]],
@@ -407,14 +405,14 @@ class KSTest(TwoSampleTestBase):
                          progress_bar = progress_bar,
                          verbose = verbose)
         
-    def compute(self, max_vectorize: int = int(1e6)) -> None:
+    def compute(self, max_vectorize: int = 100) -> None:
         """
         Function that computes the Kolmogorov-Smirnov test-statistic and p-value for two samples
         selecting among the Test_np and Test_tf methods depending on the use_tf attribute.
         
         Parameters:
         ----------
-        max_vectorize: int, optional, default = int(1e6)
+        max_vectorize: int, optional, default = 100
             Maximum number of samples that can be processed by the tensorflow backend.
             If None, the total number of samples is not checked.
 
@@ -547,22 +545,23 @@ class KSTest(TwoSampleTestBase):
         result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
         self.Results.append(result)
         
-    def Test_tf(self, max_vectorize: int = int(1e6)) -> None:
+    def Test_tf(self, max_vectorize: int = 100) -> None:
         """
         Function that computes the Kolmogorov-Smirnov test-statistic and p-value for two samples using tensorflow functions.
         The calculation is based in the custom function ks_2samp_tf.
         The calculation is performed in batches of size batch_size.
         The number of batches is niter.
         The total number of samples is niter*batch_size.
-        The total number of samples must be less than or equal to max_vectorize.
-        If max_vectorize is None, the total number of samples is not checked.
+        The calculation is parallelized over max_vectorize (out of ndims*niter).
         The results are stored in the Results attribute.
 
         Parameters:
         ----------
-        max_vectorize: int, optional, default = int(1e6)
-            Maximum number of samples that can be processed by the tensorflow backend.
-            If None, the total number of samples is not checked.
+        max_vectorize: int, optional, default = 100
+            A maximum number of batch_size*max_vectorize samples per time are processed by the tensorflow backend.
+            Given a value of max_vectorize, the ndims*niter KS calculations are split in chunks of max_vectorize.
+            Each chunk is processed by the tensorflow backend in parallel. If ndims is larger than max_vectorize,
+            the calculation is vectorized niter times over ndims.
 
         Returns:
         -------
@@ -673,7 +672,7 @@ class KSTest(TwoSampleTestBase):
             return res
 
         @tf.function(reduce_retracing=True)
-        def compute_test(max_vectorize: int = int(1e6)) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
+        def compute_test(max_vectorize: int = 100) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
             # Check if numerical distributions are empty and print a warning if so
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore

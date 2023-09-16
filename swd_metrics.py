@@ -455,6 +455,10 @@ class SWDMetric(TwoSampleTestBase):
             
         @tf.function(reduce_retracing=True)
         def compute_test() -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+            # Check if numerical distributions are empty and print a warning if so
+            conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
+            conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
+            
             # Initialize the result TensorArray
             res = tf.TensorArray(dtype, size = niter)
             res_swd_mean = tf.TensorArray(dtype, size = niter)
