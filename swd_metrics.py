@@ -1,4 +1,6 @@
-__all__ = ["SWDMetric"]
+__all__ = ["wasserstein_distance_tf",
+           "swd_2samp_tf",
+           "SWDMetric"]
 
 import numpy as np
 import tensorflow as tf
@@ -22,7 +24,7 @@ from .base import TwoSampleTestResults
 from typing import Tuple, Union, Optional, Type, Dict, Any, List
 from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, IntType, DataTypeTF, DataTypeNP, DataType, DistTypeTF, DistTypeNP, DistType, DataDistTypeNP, DataDistTypeTF, DataDistType, BoolType
 
-@tf.function(experimental_compile=True)
+@tf.function(experimental_compile=True, reduce_retracing=True)
 def wasserstein_distance_tf(data1: tf.Tensor, 
                             data2: tf.Tensor
                            ) -> tf.Tensor:
@@ -53,7 +55,7 @@ def wasserstein_distance_tf(data1: tf.Tensor,
     wd = tf.reduce_mean(diff)    
     return wd
 
-@tf.function(experimental_compile=True)
+@tf.function(experimental_compile=True, reduce_retracing = True)
 def swd_2samp_tf(data1: tf.Tensor, 
                  data2: tf.Tensor,
                  nslices: int = 100
@@ -63,7 +65,7 @@ def swd_2samp_tf(data1: tf.Tensor,
     The sliced Wasserstein distance is computed by projecting the samples 
     onto random directions, computing the Wasserstein distance between the projections, and
     then taking the mean and standard deviation of the Wasserstein distances.
-    The Wasserstein distances are computed using the wasserstein_distance_tf function.
+    The sliced Wasserstein distances can be computed using either numpy or tensorflow.
     
     The tf.function decorator is used to speed up subsequent calls to this function and to avoid retracing.
 
@@ -343,7 +345,7 @@ class SWDMetric(TwoSampleTestBase):
             
         reset_random_seeds(seed = seed)
         
-        conditional_print(self.verbose, "Running numpy SWD calculation...")
+        conditional_print(self.verbose, "Running numpy SKS calculation...")
         for k in range(niter):
             if not np.shape(dist_1_num[0])[0] == 0 and not np.shape(dist_2_num[0])[0] == 0:
                 dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
@@ -520,7 +522,7 @@ class SWDMetric(TwoSampleTestBase):
         test_name: str = "SWD Test_tf"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}}
         result_value: Dict[str, Any] = {"metric_lists": swd_lists.numpy(),
-                        "metric_means": swd_means.numpy(),
-                        "metric_stds": swd_stds.numpy()}
+                                        "metric_means": swd_means.numpy(),
+                                        "metric_stds": swd_stds.numpy()}
         result = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
         self.Results.append(result)

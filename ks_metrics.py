@@ -25,7 +25,7 @@ from typing import Tuple, Union, Optional, Type, Dict, Any, List
 from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, IntType, DataTypeTF, DataTypeNP, DataType, DistTypeTF, DistTypeNP, DistType, DataDistTypeNP, DataDistTypeTF, DataDistType, BoolType
 
 #@tf.function(reduce_retracing = True)
-@tf.function(experimental_compile=True)
+@tf.function(experimental_compile=True, reduce_retracing = True)
 def ks_2samp_tf(data1: tf.Tensor, 
                 data2: tf.Tensor,
                 alternative: str = 'two-sided',
@@ -71,7 +71,7 @@ def ks_2samp_tf(data1: tf.Tensor,
     return d, prob, d_location, d_sign
     
 #@tf.function(reduce_retracing = True)
-@tf.function(experimental_compile=True)
+@tf.function(experimental_compile=True, reduce_retracing = True)
 def _ks_2samp_tf_internal(data1: tf.Tensor, 
                           data2: tf.Tensor,
                           alternative_int: int = 0,
@@ -619,10 +619,10 @@ class KSTest(TwoSampleTestBase):
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
         
-        #@tf.function(experimental_compile=True)
+        #@tf.function(experimental_compile=True, reduce_retracing = True)
         #@tf.function(reduce_retracing=True)
         def batched_test(start, end):
-            conditional_tf_print(tf.logical_and(tf.logical_or(tf.math.logical_not(tf.equal(start,0)),tf.math.logical_not(tf.equal(end,niter))), self.verbose), "Iterating from", start, "to", end, "out of", niter, ".")
+            conditional_tf_print(tf.logical_and(tf.logical_or(tf.math.logical_not(tf.equal(start,0)),tf.math.logical_not(tf.equal(end,niter))), self.verbose), "Iterating from", start, "to", end, "out of", niter, ".") # type: ignore
             # Define unique constants for the two distributions. It is sufficient that these two are different to get different samples from the two distributions, if they are equal. 
             # There is not problem with subsequent calls to the batched_test function, since the random state is updated at each call.
             seed_dist_1  = int(1e6)  # Seed for distribution 1
@@ -674,7 +674,7 @@ class KSTest(TwoSampleTestBase):
         
             return res
 
-        #@tf.function(experimental_compile=True)
+        #@tf.function(experimental_compile=True, reduce_retracing = True)
         #@tf.function(reduce_retracing=True)
         def compute_test(max_vectorize: int = 100) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
             # Check if numerical distributions are empty and print a warning if so
@@ -689,7 +689,7 @@ class KSTest(TwoSampleTestBase):
 
             # Compute the number of chunks
             nchunks: int = int(tf.cast(tf.math.ceil(niter / max_iter_per_chunk), tf.int32)) # type: ignore
-            conditional_tf_print(tf.logical_and(self.verbose,tf.logical_not(tf.equal(nchunks,1))), "nchunks =", nchunks)
+            conditional_tf_print(tf.logical_and(self.verbose,tf.logical_not(tf.equal(nchunks,1))), "nchunks =", nchunks) # type: ignore
             
             # Run the computation in chunks
             # Initialize the result TensorArray

@@ -59,7 +59,7 @@ def fn_2samp_np(data1: np.ndarray,
     frob_norm = np.linalg.norm(matrix_sum, ord='fro')
     return frob_norm # type: ignore
 
-@tf.function(experimental_compile=True)
+@tf.function(experimental_compile=True, reduce_retracing = True)
 def fn_2samp_tf(data1: tf.Tensor, 
                 data2: tf.Tensor
                ) -> tf.Tensor:
@@ -78,8 +78,8 @@ class FNMetric(TwoSampleTestBase):
     Class for computing the Frobenius norm between the correlation matrices of the two samples.
     It inherits from the TwoSampleTestBase class.
     The FN is computed by projecting the samples onto random directions, 
-    computing the Wasserstein distance between the projections, and
-    then taking the mean and standard deviation of the Wasserstein distances.
+    computing the correlation matrices of the projected samples, and computing the Frobenius norm
+    between the correlation matrices of the two samples.
     The Frobenius norm can be computed using either numpy or tensorflow.
     The scipy implementation is used for the numpy backend.
     A custom tensorflow implementation is used for the tensorflow backend.

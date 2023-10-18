@@ -1,4 +1,6 @@
 from .ks_metrics import KSTest
+from .sks_metrics import SKSTest
+from .multiks_metrics import MultiKSTest
 from .swd_metrics import SWDMetric
 from .fn_metrics import FNMetric
 from .lr_metrics import LRMetric

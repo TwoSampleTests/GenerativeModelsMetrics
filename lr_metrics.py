@@ -77,7 +77,7 @@ def lr_statistic_np(logprob_ref_ref: DataTypeNP,
     
     return logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm
 
-@tf.function(experimental_compile=True)
+@tf.function(experimental_compile=True, reduce_retracing = True)
 def lr_statistic_tf(logprob_ref_ref: DataTypeTF,
                     logprob_ref_alt: DataTypeTF,
                     logprob_alt_alt: DataTypeTF
