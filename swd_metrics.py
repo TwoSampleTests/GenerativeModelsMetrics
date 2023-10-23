@@ -24,7 +24,7 @@ from .base import TwoSampleTestResults
 from typing import Tuple, Union, Optional, Type, Dict, Any, List
 from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, IntType, DataTypeTF, DataTypeNP, DataType, DistTypeTF, DistTypeNP, DistType, DataDistTypeNP, DataDistTypeTF, DataDistType, BoolType
 
-@tf.function(experimental_compile=True, reduce_retracing=True)
+@tf.function(jit_compile=True, reduce_retracing=True)
 def wasserstein_distance_tf(data1: tf.Tensor, 
                             data2: tf.Tensor
                            ) -> tf.Tensor:
@@ -55,7 +55,7 @@ def wasserstein_distance_tf(data1: tf.Tensor,
     wd = tf.reduce_mean(diff)    
     return wd
 
-@tf.function(experimental_compile=True, reduce_retracing = True)
+@tf.function(jit_compile=True, reduce_retracing = True)
 def swd_2samp_tf(data1: tf.Tensor, 
                  data2: tf.Tensor,
                  nslices: int = 100

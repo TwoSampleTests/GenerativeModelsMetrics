@@ -34,9 +34,7 @@ class TwoSampleTestInputs(object):
                  dist_1_input: DataDistType,
                  dist_2_input: DataDistType,
                  niter: int = 10,
-                 batch_size_test: int = 100000,
-                 batch_size_gen: int = 1000,
-                 small_sample_threshold: int = 1e7,
+                 batch_size: int = 100000,
                  dtype_input: DTypeType = np.float32,
                  seed_input: Optional[int] = None,
                  use_tf: bool = False,
@@ -47,9 +45,7 @@ class TwoSampleTestInputs(object):
         self._dist_1_input: DataDistType = dist_1_input
         self._dist_2_input: DataDistType = dist_2_input
         self._niter: int = niter
-        self._batch_size_test: int = batch_size_test
-        self._batch_size_gen: int = batch_size_gen
-        self._small_sample_threshold: int = small_sample_threshold
+        self._batch_size: int = batch_size
         self._dtype_input: tf.DType = dtype_input
         self._seed: int = seed_input or int(np.random.randint(0, 2**32 - 1))
         self._use_tf: bool = use_tf
@@ -121,48 +117,19 @@ class TwoSampleTestInputs(object):
         self.__preprocess(verbose = False)
 
     @property
-    def batch_size_test(self) -> int:
-        return self._batch_size_test
+    def batch_size(self) -> int:
+        return self._batch_size
     
-    @batch_size_test.setter
-    def batch_size_test(self,
-                        batch_size_test: int
-                       ) -> None:
-        if isinstance(batch_size_test, int):
-            if batch_size_test > 0:
-                self._batch_size_test = batch_size_test
+    @batch_size.setter
+    def batch_size(self,
+                   batch_size: int
+                  ) -> None:
+        if isinstance(batch_size, int):
+            if batch_size > 0:
+                self._batch_size = batch_size
             else:
-                raise ValueError("batch_size_test must be positive")
+                raise ValueError("batch_size must be positive")
         self.__preprocess(verbose = False)
-        
-    @property
-    def batch_size_gen(self) -> int:
-        return self._batch_size_gen
-    
-    @batch_size_gen.setter
-    def batch_size_gen(self,
-                       batch_size_gen: int
-                      ) -> None:
-        if isinstance(batch_size_gen, int):
-            if batch_size_gen > 0:
-                self._batch_size_gen = batch_size_gen
-            else:
-                raise ValueError("batch_size_gen must be positive")
-            
-    @property
-    def small_sample_threshold(self) -> int:
-        return self._small_sample_threshold
-    
-    @small_sample_threshold.setter
-    def small_sample_threshold(self,
-                               small_sample_threshold: int
-                              ) -> None:
-          if isinstance(small_sample_threshold, int):
-                if small_sample_threshold > 0:
-                 self._small_sample_threshold = small_sample_threshold
-                else:
-                 raise ValueError("small_sample_threshold must be positive")
-          self.__preprocess(verbose = False)
         
     @property
     def dtype_input(self) -> Union[tf.DType, np.dtype, type]:
@@ -191,10 +158,6 @@ class TwoSampleTestInputs(object):
         else:
             raise TypeError("seed_input must be an int")
         self.__preprocess(verbose = False)
-        
-    @property
-    def seed_generator(self) -> tf.random.Generator:
-        return self._seed_generator
         
     @property
     def use_tf(self) -> bool:
@@ -337,10 +300,10 @@ class TwoSampleTestInputs(object):
             raise TypeError("small_sample must be a bool or tf.Tensor with numpy() method returning a np.bool_")
         self.__check_set_distributions()
         if self.small_sample:
-            if not (self.batch_size_test*self.niter*self.ndims <= self.small_sample_threshold or self.nsamples*self.ndims <= self.small_sample_threshold):
+            if not (self.batch_size*self.niter*self.ndims <= 1e7 or self.nsamples*self.ndims <= 1e7):
                 print("Warning: small_sample is set to True, but the number of samples is large. This may cause memory issues.")
         if not self.small_sample:
-            if self.batch_size_test*self.niter*self.ndims <= self.small_sample_threshold or self.nsamples*self.ndims <= self.small_sample_threshold:
+            if self.batch_size*self.niter*self.ndims <= 1e7 or self.nsamples*self.ndims <= 1e7:
                 print("Warning: small_sample is set to False, but the number of samples is small. Setting small_sample to True may speed up calculations.")
                         
     def __parse_input_dist(self,
@@ -440,7 +403,7 @@ class TwoSampleTestInputs(object):
         elif self.nsamples_1 == 0 and self.nsamples_2 != 0:
             self._nsamples = int(self.nsamples_2)
         elif self.nsamples_1 == 0 and self.nsamples_2 == 0:
-            self._nsamples = int(self.batch_size_test * self.niter)
+            self._nsamples = int(self.batch_size * self.niter)
         else:
             raise ValueError("nsamples_1 and nsamples_2 should be positive integers or zero.")
         
@@ -457,7 +420,7 @@ class TwoSampleTestInputs(object):
                                           false_fn = lambda: set_nsamples(self.nsamples_1)),
                 false_fn = lambda: tf.cond(tf.not_equal(self.nsamples_2, tf.constant(0)),
                                            true_fn = lambda: set_nsamples(self.nsamples_2),
-                                           false_fn = lambda: set_nsamples(self.batch_size_test * self.niter)))
+                                           false_fn = lambda: set_nsamples(self.batch_size * self.niter)))
         
     def __check_set_nsamples(self) -> None:
         if self.use_tf:
@@ -466,17 +429,17 @@ class TwoSampleTestInputs(object):
             self.__check_set_nsamples_np()
             
     def __check_set_small_sample_np(self) -> None:
-        if self.batch_size_test*self.niter*self.ndims <= self.small_sample_threshold or self.nsamples*self.ndims <= self.small_sample_threshold:
-            self._small_sample = True
+        if self.batch_size*self.niter*self.ndims <= 1e7 or self.nsamples*self.ndims <= 1e7:
+            self.small_sample = True
         else:
-            self._small_sample = False
+            self.small_sample = False
     
     def __check_set_small_sample_tf(self) -> None:
         # Utility functions
         def set_small_sample(value: bool) -> None:
-            self._small_sample = value
-        tf.cond(tf.logical_or(tf.less_equal(self.batch_size_test*self.niter*self.ndims, tf.constant(self.small_sample_threshold)), 
-                              tf.less_equal(self.nsamples*self.ndims, tf.constant(self.small_sample_threshold))),
+            self.small_sample = value
+        tf.cond(tf.logical_or(tf.less_equal(self.batch_size*self.niter*self.ndims, tf.constant(1e7)), 
+                              tf.less_equal(self.nsamples*self.ndims, tf.constant(1e7))),
                 true_fn = lambda: set_small_sample(True),
                 false_fn = lambda: set_small_sample(False))
         
@@ -522,10 +485,11 @@ class TwoSampleTestInputs(object):
             
     def __check_set_distributions_tf(self) -> None:
         # Utility functions
-        def set_dist_num_from_symb(dist: tfp.distributions.Distribution) -> tf.Tensor:
+        def set_dist_num_from_symb(dist: tfp.distributions.Distribution,
+                                   seed: int = 0) -> tf.Tensor:
             print("Setting dist_num from dist_symb.")
             if isinstance(dist, tfp.distributions.Distribution):
-                dist_num: tf.Tensor = generate_and_clean_data(dist, self.nsamples, self.batch_size_gen, dtype = self.dtype, seed_generator = self.seed_generator, mirror_strategy = self.mirror_strategy) # type: ignore
+                dist_num: tf.Tensor = generate_and_clean_data(dist, self.nsamples, self.nsamples, dtype = self.dtype, seed = int(seed), mirror_strategy = self.mirror_strategy) # type: ignore
             else:
                 raise ValueError("dist should be an instance of tfp.distributions.Distribution.")
             return dist_num
@@ -543,16 +507,17 @@ class TwoSampleTestInputs(object):
         
         print("Checking and setting numerical distributions.")
         
-        # Initialize seeds generator
+        seed_dist_1  = int(1e6)  # Seed for distribution 1
+        seed_dist_2  = int(1e12)  # Seed for distribution 2
         
         dist_1_num = tf.cond(self.is_symb_1,
                              true_fn = lambda: tf.cond(self.small_sample,
-                                                       true_fn = lambda: set_dist_num_from_symb(self.dist_1_symb),
+                                                       true_fn = lambda: set_dist_num_from_symb(self.dist_1_symb, seed = seed_dist_1),
                                                        false_fn = lambda: reset_dist_num(self.dist_1_symb)),
                              false_fn = lambda: return_dist_num(self.dist_1_num))
         dist_2_num = tf.cond(self.is_symb_2,
                              true_fn = lambda: tf.cond(self.small_sample,
-                                                       true_fn = lambda: set_dist_num_from_symb(self.dist_2_symb),
+                                                       true_fn = lambda: set_dist_num_from_symb(self.dist_2_symb, seed = seed_dist_2),
                                                        false_fn = lambda: reset_dist_num(self.dist_2_symb)),
                              false_fn = lambda: return_dist_num(self.dist_2_num))
         self._dist_1_num = tf.cast(dist_1_num, self.dtype)[:self.nsamples, :] # type: ignore
@@ -564,19 +529,11 @@ class TwoSampleTestInputs(object):
             self.__check_set_distributions_tf()
         else:
             self.__check_set_distributions_np()
-            
-    def __set_seed_generator(self) -> None:
-        # Set seeds generator for tensorflow backend
-        if self.use_tf:
-            self._seed_generator = tf.random.Generator.from_seed(self.seed)
         
     def __preprocess(self, 
                      verbose: bool = False) -> None:
         # Reset random seeds
         reset_random_seeds(seed = self.seed)
-        
-        # Set generator
-        self.__set_seed_generator()
         
         # Parse input distributions
         self.__parse_input_distributions(verbose = verbose)
@@ -602,10 +559,8 @@ class TwoSampleTestInputs(object):
                 "is_symb_2": bool(self.is_symb_2),
                 "ndims": self.ndims,
                 "niter": self.niter,
-                "batch_size_test": self.batch_size_test,
-                "batch_size_gen": self.batch_size_gen,
+                "batch_size": self.batch_size,
                 "dtype": self.dtype,
-                "small_sample_threshold": self.small_sample_threshold,
                 "small_sample": self.small_sample}
     
 @dataclass
@@ -667,7 +622,7 @@ class TwoSampleTestResults(object):
             result.print_result(print_mode = print_mode)
     
     def get_results_as_dataframe(self,
-                                 sort_kwargs: dict = {"by": ["batch_size_test","niter"], "ascending": [True]},
+                                 sort_kwargs: dict = {"by": ["batch_size","niter"], "ascending": [True]},
                                  print_mode: str = "full"
                                 ) -> pd.DataFrame:
         df = pd.DataFrame()
@@ -791,46 +746,41 @@ class TwoSampleTestBase(ABC):
     @property
     def small_sample(self) -> bool:
         return self.Inputs.small_sample
-    
-    @property
-    def small_sample_threshold(self) -> int:
-        return self.Inputs.small_sample_threshold
             
     def get_niter_batch_size_np(self) -> Tuple[int, int]:
         nsamples = self.Inputs.nsamples
-        batch_size_test = self.Inputs.batch_size_test
+        batch_size = self.Inputs.batch_size
         niter = self.Inputs.niter
-        if nsamples < batch_size_test * niter:
-            batch_size_test = nsamples // niter
+        if nsamples < batch_size * niter:
+            batch_size = nsamples // niter
         else:
             pass
-        if batch_size_test == 0:
-            raise ValueError("batch_size_test should be positive integer and number of samples should be larger than number of iterations.")
-        return niter, batch_size_test
+        if batch_size == 0:
+            raise ValueError("batch_size should be positive integer and number of samples should be larger than number of iterations.")
+        return niter, batch_size
     
     def get_niter_batch_size_tf(self) -> Tuple[tf.Tensor, tf.Tensor]:
         nsamples: tf.Tensor = tf.cast(self.Inputs.nsamples, dtype = tf.int32) # type: ignore
-        batch_size_test: tf.Tensor = tf.cast(self.Inputs.batch_size_test, dtype = tf.int32) # type: ignore
+        batch_size: tf.Tensor = tf.cast(self.Inputs.batch_size, dtype = tf.int32) # type: ignore
         niter: tf.Tensor = tf.cast(self.Inputs.niter, dtype = tf.int32) # type: ignore
-        batch_size_test_tmp = tf.cond(nsamples < batch_size_test * niter,
+        batch_size_tmp = tf.cond(nsamples < batch_size * niter,
                                     true_fn=lambda: nsamples // niter,
-                                    false_fn=lambda: batch_size_test)
-        batch_size_test: tf.Tensor = tf.cast(batch_size_test_tmp, dtype = tf.int32) # type: ignore
-        tf.debugging.assert_positive(batch_size_test, message="batch_size_test should be positive integer and number of samples should be larger than number of iterations.")
-        return niter, batch_size_test
+                                    false_fn=lambda: batch_size)
+        batch_size: tf.Tensor = tf.cast(batch_size_tmp, dtype = tf.int32) # type: ignore
+        tf.debugging.assert_positive(batch_size, message="batch_size should be positive integer and number of samples should be larger than number of iterations.")
+        return niter, batch_size
 
     @property
     def param_dict(self) -> Dict[str, Any]:
         if self.Inputs.use_tf:
-            niter, batch_size_test = self.get_niter_batch_size_np()
+            niter, batch_size = self.get_niter_batch_size_np()
         else:
-            niter, batch_size_test = self.get_niter_batch_size_tf()
+            niter, batch_size = self.get_niter_batch_size_tf()
         output_dict = self.Inputs.param_dict
         niter_used = niter
         output_dict["niter_used"] = int(niter_used)
-        output_dict["batch_size_test_used"] = int(batch_size_test)
+        output_dict["batch_size_used"] = int(batch_size)
         output_dict["computing_time"] = self.get_computing_time()
-        output_dict["small_sample_threshold"] = self.small_sample_threshold
         output_dict["small_sample"] = self.small_sample
         return output_dict    
             

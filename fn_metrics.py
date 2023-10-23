@@ -59,7 +59,7 @@ def fn_2samp_np(data1: np.ndarray,
     frob_norm = np.linalg.norm(matrix_sum, ord='fro')
     return frob_norm # type: ignore
 
-@tf.function(experimental_compile=True, reduce_retracing = True)
+@tf.function(jit_compile=True, reduce_retracing = True)
 def fn_2samp_tf(data1: tf.Tensor, 
                 data2: tf.Tensor
                ) -> tf.Tensor:
@@ -339,6 +339,7 @@ class FNMetric(TwoSampleTestBase):
         --------
         None
         """
+        max_vectorize = int(max_vectorize)
         # Set alias for inputs
         if isinstance(self.Inputs.dist_1_num, np.ndarray):
             dist_1_num: tf.Tensor = tf.convert_to_tensor(self.Inputs.dist_1_num)
@@ -379,27 +380,20 @@ class FNMetric(TwoSampleTestBase):
                     
         def set_dist_num_from_symb(dist: DistTypeTF,
                                    nsamples: int,
-                                   seed: int = 0
                                   ) -> tf.Tensor:
-            nonlocal dtype
-            #dist_num: tf.Tensor = tf.cast(dist.sample(nsamples, seed = int(seed)), dtype = dtype) # type: ignore
-            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, 100, dtype = self.Inputs.dtype, seed = int(seed), mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
             return dist_num
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
             
-        #@tf.function(reduce_retracing=True)
         def batched_test(start, end):
-            conditional_tf_print(tf.logical_and(tf.logical_or(tf.math.logical_not(tf.equal(start,0)),tf.math.logical_not(tf.equal(end,niter))), self.verbose), "Iterating from", start, "to", end, "out of", niter, ".")
-            seed_dist_1  = int(1e6)  # Seed for distribution 1
-            seed_dist_2  = int(1e12)  # Seed for distribution 2
-
+            # Define batched distributions
             dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start), seed = seed_dist_1),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)),
                                                false_fn = lambda: return_dist_num(dist_1_num[start*batch_size:end*batch_size, :])) # type: ignore
             dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start), seed = seed_dist_2),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)),
                                                false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
 
             dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims))
@@ -416,34 +410,36 @@ class FNMetric(TwoSampleTestBase):
 
             return frob_norm_list
         
-        #@tf.function(reduce_retracing=True)
         def compute_test(max_vectorize: int = 100) -> tf.Tensor:
             # Check if numerical distributions are empty and print a warning if so
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
             
             # Ensure that max_vectorize is an integer larger than ndims
-            max_vectorize = int(tf.cast(tf.maximum(max_vectorize, ndims),tf.int32)) # type: ignore
+            max_vectorize = int(tf.cast(tf.minimum(max_vectorize, niter),tf.int32)) # type: ignore
 
             # Compute the maximum number of iterations per chunk
-            max_iter_per_chunk: int = int(tf.cast(tf.math.floor(max_vectorize / ndims), tf.int32)) # type: ignore
+            max_iter_per_chunk: int = max_vectorize # type: ignore
             
            # Compute the number of chunks
             nchunks: int = int(tf.cast(tf.math.ceil(niter / max_iter_per_chunk), tf.int32)) # type: ignore
-            conditional_tf_print(tf.logical_and(self.verbose,tf.logical_not(tf.equal(nchunks,1))), "nchunks =", nchunks)
+            conditional_tf_print(tf.logical_and(self.verbose,tf.logical_not(tf.equal(nchunks,1))), "nchunks =", nchunks) # type: ignore
 
             res = tf.TensorArray(dtype, size = nchunks)
 
             def body(i, res):
                 start = i * max_iter_per_chunk
                 end = tf.minimum(start + max_iter_per_chunk, niter)
+                conditional_tf_print(tf.logical_and(tf.logical_or(tf.math.logical_not(tf.equal(start,0)),tf.math.logical_not(tf.equal(end,niter))), self.verbose), "Iterating from", start, "to", end, "out of", niter, ".") # type: ignore
                 chunk_result = batched_test(start, end) # type: ignore
                 res = res.write(i, chunk_result)
                 return i+1, res
 
             _, res = tf.while_loop(lambda i, res: i < nchunks, body, [0, res])
+            
+            res_stacked = tf.reshape(res.stack(), (niter,))
 
-            return res.stack()
+            return res_stacked
 
         start_calculation()
         

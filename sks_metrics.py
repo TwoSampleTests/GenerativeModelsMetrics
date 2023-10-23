@@ -25,7 +25,7 @@ from typing import Tuple, Union, Optional, Type, Dict, Any, List
 from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, IntType, DataTypeTF, DataTypeNP, DataType, DistTypeTF, DistTypeNP, DistType, DataDistTypeNP, DataDistTypeTF, DataDistType, BoolType
 
 
-@tf.function(experimental_compile=True, reduce_retracing=True)
+@tf.function(jit_compile=True, reduce_retracing=True)
 def sks_2samp_tf(data1: tf.Tensor, 
                  data2: tf.Tensor,
                  alternative: str = 'two-sided',
@@ -84,7 +84,7 @@ def sks_2samp_tf(data1: tf.Tensor,
         - sks_proj: tf.Tensor, shape = (nslices,)
             Sliced Kolmogorov-Smirnov distances.
     """
-    @tf.function(experimental_compile=True, reduce_retracing = True)
+    #@tf.function(jit_compile=True, reduce_retracing = True)
     def simplified_ks_2samp_tf(a, b):
         return ks_2samp_tf(a, b, alternative = alternative, method = method, precision = precision)[0] # type: ignore
         #return ks_2samp(a, b, alternative='two-sided', mode='asymp')[0]

@@ -24,6 +24,7 @@ from .base import TwoSampleTestResults
 from typing import Tuple, Union, Optional, Type, Dict, Any, List
 from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, IntType, DataTypeTF, DataTypeNP, DataType, DistTypeTF, DistTypeNP, DistType, DataDistTypeNP, DataDistTypeTF, DataDistType, BoolType
 
+#@tf.function(reduce_retracing = True)
 @tf.function(jit_compile=True, reduce_retracing = True)
 def ks_2samp_tf(data1: tf.Tensor, 
                 data2: tf.Tensor,
@@ -69,6 +70,7 @@ def ks_2samp_tf(data1: tf.Tensor,
                                                         verbose = verbose) # type: ignore
     return d, prob, d_location, d_sign
     
+#@tf.function(reduce_retracing = True)
 @tf.function(jit_compile=True, reduce_retracing = True)
 def _ks_2samp_tf_internal(data1: tf.Tensor, 
                           data2: tf.Tensor,
@@ -589,7 +591,7 @@ class KSTest(TwoSampleTestBase):
         batch_size: int
         niter, batch_size = [int(i) for i in self.get_niter_batch_size_tf()] # type: ignore
         dtype: tf.DType = tf.as_dtype(self.Inputs.dtype)
-        seed = self.Inputs.seed
+        seed: int = self.Inputs.seed
         
         # Utility functions
         def start_calculation() -> None:
@@ -607,20 +609,29 @@ class KSTest(TwoSampleTestBase):
             
         def set_dist_num_from_symb(dist: DistTypeTF,
                                    nsamples: int,
+                                   seed: int = 0
                                   ) -> tf.Tensor:
-            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+            nonlocal dtype
+            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, 100, dtype = self.Inputs.dtype, seed = seed, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
             return dist_num
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
         
-        def batched_test(start, end):
+        @tf.function(jit_compile=True, reduce_retracing = True)
+        def batched_test(start, end, seed_dist_1, seed_dist_2):
+            conditional_tf_print(tf.logical_and(tf.logical_or(tf.math.logical_not(tf.equal(start,0)),tf.math.logical_not(tf.equal(end,niter))), self.verbose), "Iterating from", start, "to", end, "out of", niter, ".") # type: ignore
+            # Define unique constants for the two distributions. It is sufficient that these two are different to get different samples from the two distributions, if they are equal. 
+            # There is not problem with subsequent calls to the batched_test function, since the random state is updated at each call.
+            #seed_dist_1  = int(1e6)  # Seed for distribution 1
+            #seed_dist_2  = int(1e12)  # Seed for distribution 2
+            
             # Define batched distributions
             dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start), seed = seed_dist_1),
                                                false_fn = lambda: return_dist_num(dist_1_num[start*batch_size:end*batch_size, :])) # type: ignore
             dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start), seed = seed_dist_2),
                                                false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
 
             dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims))
@@ -661,11 +672,15 @@ class KSTest(TwoSampleTestBase):
         
             return res
 
+        @tf.function(jit_compile=True, reduce_retracing = True)
         def compute_test(max_vectorize: int = 100) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
             # Check if numerical distributions are empty and print a warning if so
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
-                        
+            
+            # Initialize seeds generator
+            rng = tf.random.Generator.from_seed(seed)
+            
             # Ensure that max_vectorize is an integer larger than ndims
             max_vectorize = int(tf.cast(tf.maximum(max_vectorize, ndims),tf.int32)) # type: ignore
 
@@ -685,12 +700,14 @@ class KSTest(TwoSampleTestBase):
             pvalue_means = tf.TensorArray(dtype, size = nchunks)
             pvalue_stds = tf.TensorArray(dtype, size = nchunks)
             pvalue_lists = tf.TensorArray(dtype, size = nchunks)
-            
+
             def body(i, res):
+                seed1 = tf.cast(rng.make_seeds(2)[0], tf.int32)
+                seed2 = tf.cast(rng.make_seeds(2)[0], tf.int32)
+                print(f"seed1 = {seed1}, seed2 = {seed2}")
                 start = i * max_iter_per_chunk
                 end = tf.minimum(start + max_iter_per_chunk, niter)
-                conditional_tf_print(tf.logical_and(tf.logical_or(tf.math.logical_not(tf.equal(start,0)),tf.math.logical_not(tf.equal(end,niter))), self.verbose), "Iterating from", start, "to", end, "out of", niter, ".") # type: ignore
-                chunk_result = batched_test(start, end) # type: ignore
+                chunk_result = batched_test(start, end, seed1, seed2) # type: ignore
                 res = res.write(i, chunk_result)
                 return i+1, res
 

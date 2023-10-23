@@ -77,7 +77,10 @@ def lr_statistic_np(logprob_ref_ref: DataTypeNP,
     
     return logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm
 
-@tf.function(experimental_compile=True, reduce_retracing = True)
+# If need to compile, should remove tf.print 'warning' statements. Doing some benchmarkings don't seem to improve performance.
+# Left uncompiled for now.
+@tf.function(jit_compile=True, reduce_retracing = True)
+#@tf.function(reduce_retracing = True)
 def lr_statistic_tf(logprob_ref_ref: DataTypeTF,
                     logprob_ref_alt: DataTypeTF,
                     logprob_alt_alt: DataTypeTF
@@ -95,11 +98,11 @@ def lr_statistic_tf(logprob_ref_ref: DataTypeTF,
     n_ref_finite = tf.reduce_sum(tf.cast(finite_indices_ref_ref, tf.int32))
     n_alt_finite = tf.reduce_sum(tf.cast(tf.math.logical_and(finite_indices_alt_alt, finite_indices_ref_alt), tf.int32))
 
-    if n_ref_finite < n_ref:
-        tf.print("Warning: Removed a fraction of reference samples due to non-finite log probabilities.")
+    #if n_ref_finite < n_ref:
+    #    tf.print("Warning: Removed a fraction of reference samples due to non-finite log probabilities.")
         
-    if n_alt_finite < n_alt:
-        tf.print(f"Warning: Removed a fraction of alternative samples due to non-finite log probabilities.")
+    #if n_alt_finite < n_alt:
+    #    tf.print(f"Warning: Removed a fraction of alternative samples due to non-finite log probabilities.")
     
     # Combined finite indices
     combined_finite_indices = tf.math.logical_and(tf.math.logical_and(finite_indices_ref_ref, finite_indices_ref_alt), finite_indices_alt_alt)
@@ -487,11 +490,8 @@ class LRMetric(TwoSampleTestBase):
             
         def set_dist_num_from_symb(dist: DistTypeTF,
                                    nsamples: int,
-                                   seed: int = 0
                                   ) -> tf.Tensor:
-            nonlocal dtype
-            #dist_num: tf.Tensor = tf.cast(dist.sample(nsamples, seed = int(seed)), dtype = dtype) # type: ignore
-            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, 1000, dtype = self.Inputs.dtype, seed = int(seed), mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
             return dist_num
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
@@ -506,19 +506,13 @@ class LRMetric(TwoSampleTestBase):
             # Initialize the result TensorArray
             res = tf.TensorArray(dtype, size = niter)
             
-            # Define unique constants for the two distributions. It is sufficient that these two are different to get different samples from the two distributions, if they are equal. 
-            # There is not problem with subsequent calls to the batched_test function, since the random state is updated at each call.
-            seed_dist_1  = int(1e6)  # Seed for distribution 1
-            seed_dist_2  = int(1e12)  # Seed for distribution 2
-    
             def body(i, res):
-                
                 # Define the loop body to vectorize over ndims*chunk_size
                 dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size, seed = seed_dist_1), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size), # type: ignore
                                                false_fn = lambda: return_dist_num(dist_1_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
                 dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size, seed = seed_dist_2), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size), # type: ignore
                                                false_fn = lambda: return_dist_num(dist_2_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
                 logprob_ref_ref = dist_1_symb.log_prob(dist_1_k) # type: ignore
                 logprob_ref_alt = dist_1_symb.log_prob(dist_2_k) # type: ignore
@@ -552,10 +546,10 @@ class LRMetric(TwoSampleTestBase):
         timestamp: str = datetime.now().isoformat()
         test_name: str = "LR Test_tf"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}}
-        result_value = {"logprob_ref_ref_sum_list": logprob_ref_ref_sum_list.numpy(),
-                        "logprob_ref_alt_sum_list": logprob_ref_alt_sum_list.numpy(),
-                        "logprob_alt_alt_sum_list": logprob_alt_alt_sum_list.numpy(),
-                        "lik_ratio_list": lik_ratio_list.numpy(),
+        result_value = {"logprob_ref_ref_sum_list": logprob_ref_ref_sum_list.numpy(), # type: ignore
+                        "logprob_ref_alt_sum_list": logprob_ref_alt_sum_list.numpy(), # type: ignore
+                        "logprob_alt_alt_sum_list": logprob_alt_alt_sum_list.numpy(), # type: ignore
+                        "lik_ratio_list": lik_ratio_list.numpy(), # type: ignore
                         "lik_ratio_norm_list": lik_ratio_norm_list.numpy()} # type: ignore
         result = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
         self.Results.append(result)

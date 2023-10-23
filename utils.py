@@ -171,7 +171,7 @@ def compute_lik_ratio_statistic(dist_ref: tfp.distributions.Distribution,
     n_alt_finite_float = tf.cast(n_alt_finite, tf.float32)  
 
     # Compute normalized likelihood ratio statistic
-    n = 2 * n_ref_finite_float * n_alt_finite_float / (n_ref_finite_float + n_alt_finite_float)
+    n = 2 * n_ref_finite_float * n_alt_finite_float / (n_ref_finite_float + n_alt_finite_float) # type: ignore
     
     # Compute normalized likelihood ratio statistic
     lik_ratio_norm = lik_ratio / tf.sqrt(tf.cast(n, tf.float32))
@@ -301,133 +301,229 @@ def se_std(data):
     se_std = np.sqrt((mu_4 - mu_2**2) / (4 * mu_2 * n))
     return se_std
 
-#def generate_and_clean_data_simple(dist, n_samples, batch_size, dtype, seed):
-#    if dtype is None:
-#        dtype = tf.float32
-#    X_data = []
-#    total_samples = 0
-#
-#    while total_samples < n_samples:
-#        try:
-#            batch = dist.sample(batch_size, seed=seed)
-#
-#            # Find finite values
-#            finite_indices = tf.reduce_all(tf.math.is_finite(batch), axis=1)
-#
-#            # Warn the user if there are any non-finite values
-#            n_nonfinite = tf.reduce_sum(tf.cast(~finite_indices, tf.int32))
-#            if n_nonfinite > 0:
-#                print(f"Warning: Removed {n_nonfinite} non-finite values from the batch")
-#
-#            # Select only the finite values
-#            finite_batch = batch.numpy()[finite_indices.numpy()].astype(dtype.as_numpy_dtype)
-#
-#            X_data.append(finite_batch)
-#            total_samples += len(finite_batch)
-#        except (RuntimeError, tf.errors.ResourceExhaustedError):
-#            # If a RuntimeError or a ResourceExhaustedError occurs (possibly due to OOM), halve the batch size
-#            batch_size = batch_size // 2
-#            print("Warning: Batch size too large. Halving batch size to {}".format(batch_size),"and retrying.")
-#            if batch_size == 0:
-#                raise RuntimeError("Batch size is zero. Unable to generate samples.")
-#
-#    return np.concatenate(X_data, axis=0)[:n_samples]
-
-def generate_and_clean_data_simple(dist, n_samples, batch_size, dtype, seed):
+@tf.function(jit_compile=True, reduce_retracing=True)
+def generate_and_clean_data_simple_1(dist: tfp.distributions.Distribution,
+                                     n_samples: int,
+                                     batch_size: int, 
+                                     dtype: DTypeType,
+                                     seed_generator: tf.random.Generator
+                                    ) -> tf.Tensor:
     if dtype is None:
         dtype = tf.float32
-        
-    # Create a new random generator with a seed
-    rng = tf.random.Generator.from_seed(seed)
 
-    # Initialize a dynamic tensor array to store the samples
-    X_data = tf.TensorArray(dtype, size=0, dynamic_size=True)
-    total_samples = tf.constant(0, dtype=tf.int32)
+    # Calculate maximum number of iterations
+    max_iterations = n_samples // batch_size + 1  # +1 to handle the case where there's a remainder
 
-    for i in tf.range(0, n_samples, delta=batch_size):
-        new_seed = rng.make_seeds(2)[0]
-        new_seed = tf.cast(new_seed, tf.int32)  # Convert the seed to int32
-        current_batch_size = tf.minimum(batch_size, n_samples - i)
-        # Generate samples for the current batch
-        batch = dist.sample(current_batch_size, seed=new_seed)
-        
-        # Find finite values
-        finite_indices = tf.reduce_all(tf.math.is_finite(batch), axis=1)
-
-        # Warn the user if there are any non-finite values
-        n_nonfinite = tf.reduce_sum(tf.cast(~finite_indices, tf.int32))
-        if n_nonfinite > 0:
-            tf.print(f"Warning: Removed {n_nonfinite} non-finite values from the batch")
-
-        # Select only the finite values
-        finite_batch = tf.boolean_mask(batch, finite_indices)
-
-        # Store the batch
-        X_data = X_data.write(total_samples, finite_batch)
-
-        total_samples += tf.shape(finite_batch)[0]
-
-    # Concatenate all the stored batches
-    X_data = X_data.stack()
-    X_data = tf.reshape(X_data, [total_samples, -1])
-
-    return X_data
-
-def generate_and_clean_data_mirror(dist, n_samples, batch_size, dtype, seed):
-    if dtype is None:
-        dtype = tf.float32
-        
-    strategy = tf.distribute.MirroredStrategy()  # setup the strategy
-
-    # Create a new random generator with a seed
-    rng = tf.random.Generator.from_seed(seed)
-
-    # Compute the global batch size using the number of replicas.
-    global_batch_size = batch_size * strategy.num_replicas_in_sync
-
-    @tf.function
-    def sample_and_clean(dist, batch_size, rng):
-        new_seed = rng.make_seeds(2)[0]
-        new_seed = tf.cast(new_seed, tf.int32)  # Convert the seed to int32
+    def sample_and_clean(dist, batch_size, seed_generator):
+        new_seed = tf.cast(seed_generator.make_seeds(2)[0], tf.int32)
         batch = dist.sample(batch_size, seed=new_seed)
         finite_indices = tf.reduce_all(tf.math.is_finite(batch), axis=1)
         finite_batch = tf.boolean_mask(batch, finite_indices)
         return finite_batch, tf.shape(finite_batch)[0]
 
-    total_samples = 0
-    samples = []
+    total_samples = tf.constant(0, dtype=tf.int32)
+    samples = tf.TensorArray(dtype, size=max_iterations)  # Fixed size TensorArray
 
+    i = 0
+    while total_samples < n_samples:
+        try:
+            finite_batch, finite_count = sample_and_clean(dist, batch_size, seed_generator)
+            samples = samples.write(i, finite_batch)
+            i += 1
+            total_samples += finite_count
+        except (RuntimeError, tf.errors.ResourceExhaustedError):
+            batch_size = batch_size // 2
+            if batch_size == 0:
+                raise RuntimeError("Batch size is zero. Unable to generate samples.")
+
+    samples = samples.concat()
+    return samples[:n_samples]
+
+@tf.function(jit_compile=True, reduce_retracing=True)
+def generate_and_clean_data_simple_2(dist: tfp.distributions.Distribution,
+                                     n_samples: int,
+                                     batch_size: int, 
+                                     dtype: DTypeType,
+                                     seed_generator: tf.random.Generator
+                                     ) -> tf.Tensor:
+    if dtype is None:
+        dtype = tf.float32
+
+    # Calculate maximum number of iterations
+    max_iterations = n_samples // batch_size + 1
+
+    def sample_and_clean(dist, batch_size, seed_generator):
+        new_seed = tf.cast(seed_generator.make_seeds(2)[0], tf.int32)
+        batch = dist.sample(batch_size, seed=new_seed)
+        finite_indices = tf.reduce_all(tf.math.is_finite(batch), axis=1)
+        finite_batch = tf.boolean_mask(batch, finite_indices)
+        return finite_batch, tf.shape(finite_batch)[0]
+
+    def loop_cond(i, total_samples, samples, batch_size):
+        return total_samples < n_samples
+
+    def loop_body(i, total_samples, samples, batch_size):
+        try:
+            finite_batch, finite_count = sample_and_clean(dist, batch_size, seed_generator)
+            samples = samples.write(i, finite_batch)
+            i += 1
+            total_samples += finite_count
+        except (RuntimeError, tf.errors.ResourceExhaustedError):
+            batch_size = batch_size // 2
+            if batch_size == 0:
+                raise RuntimeError("Batch size is zero. Unable to generate samples.")
+        return i, total_samples, samples, batch_size
+
+    total_samples = tf.constant(0, dtype=tf.int32)
+    samples = tf.TensorArray(dtype, size=max_iterations)
+    i = tf.constant(0, dtype=tf.int32)
+
+    i, total_samples, samples, batch_size = tf.while_loop(
+        cond=loop_cond, 
+        body=loop_body, 
+        loop_vars=[i, total_samples, samples, batch_size],
+        shape_invariants=[
+            tf.TensorShape([]),
+            tf.TensorShape([]),
+            tf.TensorShape(None),
+            tf.TensorShape([])
+        ]
+    )
+
+    samples = samples.concat()
+    return samples[:n_samples]
+
+def generate_and_clean_data_simple(*args, **kwargs):
+    return generate_and_clean_data_simple_1(*args, **kwargs)
+
+@tf.function(reduce_retracing=True)
+def generate_and_clean_data_mirror_1(dist: tfp.distributions.Distribution,
+                                     n_samples: int,
+                                     batch_size: int, 
+                                     dtype: DTypeType,
+                                     seed_generator: tf.random.Generator
+                                    ) -> tf.Tensor:
+    #print("Generating data with mirrored strategy...")
+    if dtype is None:
+        dtype = tf.float32
+
+    strategy = tf.distribute.MirroredStrategy()
+    
+    # Calculate maximum number of iterations
+    max_iterations = n_samples // batch_size + 1  # +1 to handle the case where there's a remainder
+
+    #jit_compile=True, 
+    def sample_and_clean(dist, batch_size, seed_generator):
+        new_seed = tf.cast(seed_generator.make_seeds(2)[0], tf.int32)
+        batch = dist.sample(batch_size, seed=new_seed)
+        finite_indices = tf.reduce_all(tf.math.is_finite(batch), axis=1)
+        finite_batch = tf.boolean_mask(batch, finite_indices)
+        return finite_batch, tf.shape(finite_batch)[0]
+
+    total_samples = tf.constant(0, dtype=tf.int32)
+    samples = tf.TensorArray(dtype, size=max_iterations)  # Fixed size TensorArray
+
+    i = 0
     with strategy.scope():
         while total_samples < n_samples:
             try:
-                per_replica_samples, per_replica_sample_count = strategy.run(sample_and_clean, args=(dist, global_batch_size, rng))
-                # concatenate samples on each replica and append to list
+                per_replica_samples, per_replica_sample_count = strategy.run(sample_and_clean, args=(dist, batch_size, seed_generator))
                 per_replica_samples_concat = tf.concat(strategy.experimental_local_results(per_replica_samples), axis=0)
-                samples.append(per_replica_samples_concat)
+                samples = samples.write(i, per_replica_samples_concat)
+                i += 1
                 total_samples += strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_sample_count, axis=None)
-                print(f"Generated {total_samples} samples")
+                #print(f"Generated {total_samples} samples")
             except (RuntimeError, tf.errors.ResourceExhaustedError):
                 # If a RuntimeError or a ResourceExhaustedError occurs (possibly due to OOM), halve the batch size
-                global_batch_size = global_batch_size // 2
-                print("Warning: Batch size too large. Halving batch size to {}".format(global_batch_size),"and retrying.")
-                if global_batch_size == 0:
+                batch_size = batch_size // 2
+                print(f"Warning: Batch size too large. Halving batch size to {batch_size} and retrying.")
+                if batch_size == 0:
                     raise RuntimeError("Batch size is zero. Unable to generate samples.")
 
-    # concatenate all samples
-    samples = tf.concat(samples, axis=0)
-
-    # return the first `n_samples` samples
+    samples = samples.concat()
     return samples[:n_samples]
 
-def generate_and_clean_data(dist, n_samples, batch_size, dtype, seed, mirror_strategy = False):
+@tf.function(jit_compile=True, reduce_retracing=True)
+def generate_and_clean_data_mirror_2(dist: tfp.distributions.Distribution,
+                                     n_samples: int,
+                                     batch_size: int, 
+                                     dtype: DTypeType,
+                                     seed_generator: tf.random.Generator
+                                    ) -> tf.Tensor:
+    if dtype is None:
+        dtype = tf.float32
+
+    strategy = tf.distribute.MirroredStrategy()
+
+    # Calculate maximum number of iterations
+    max_iterations = n_samples // batch_size + 1
+
+    def sample_and_clean(dist, batch_size, seed_generator):
+        new_seed = tf.cast(seed_generator.make_seeds(2)[0], tf.int32)
+        batch = dist.sample(batch_size, seed=new_seed)
+        finite_indices = tf.reduce_all(tf.math.is_finite(batch), axis=1)
+        finite_batch = tf.boolean_mask(batch, finite_indices)
+        return finite_batch, tf.shape(finite_batch)[0]
+
+    def loop_cond(i, total_samples, samples, batch_size):
+        return total_samples < n_samples
+
+    def loop_body(i, total_samples, samples, batch_size):
+        try:
+            per_replica_samples, per_replica_sample_count = strategy.run(sample_and_clean, args=(dist, batch_size, seed_generator))
+            per_replica_samples_concat = tf.concat(strategy.experimental_local_results(per_replica_samples), axis=0)
+            samples = samples.write(i, per_replica_samples_concat)
+            i += 1
+            total_samples += strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_sample_count, axis=None)
+        except (RuntimeError, tf.errors.ResourceExhaustedError):
+            batch_size = batch_size // 2
+            if batch_size == 0:
+                raise RuntimeError("Batch size is zero. Unable to generate samples.")
+        return i, total_samples, samples, batch_size
+
+    total_samples = tf.constant(0, dtype=tf.int32)
+    samples = tf.TensorArray(dtype, size=max_iterations)
+    i = tf.constant(0, dtype=tf.int32)
+
+    with strategy.scope():
+        i, total_samples, samples, batch_size = tf.while_loop(
+            cond=loop_cond, 
+            body=loop_body, 
+            loop_vars=[i, total_samples, samples, batch_size],
+            shape_invariants=[
+                tf.TensorShape([]),
+                tf.TensorShape([]),
+                tf.TensorShape(None),
+                tf.TensorShape([])
+            ]
+        )
+
+    samples = samples.concat()
+    return samples[:n_samples]
+
+def generate_and_clean_data_mirror(*args, **kwargs):
+    return generate_and_clean_data_mirror_1(*args, **kwargs)
+
+def generate_and_clean_data(dist: tfp.distributions.Distribution,
+                            n_samples: int,
+                            batch_size: int, 
+                            dtype: DTypeType,
+                            seed_generator: tf.random.Generator,
+                            mirror_strategy: bool = False
+                            ) -> tf.Tensor:
     if batch_size > n_samples:
         batch_size = n_samples
-        print("Warning: Batch size larger than number of samples. Setting batch size to {}".format(batch_size)) 
-    gpu_devices = tf.config.experimental.list_physical_devices('GPU')
+        #print("Warning: batch_size > n_samples. Setting batch_size = n_samples and proceeding.")
+    #gpu_devices = tf.config.experimental.list_physical_devices('GPU')
     if mirror_strategy:
-        if len(gpu_devices) > 1:
-            return generate_and_clean_data_mirror(dist, n_samples, batch_size, dtype, seed)
-        else:
-            return generate_and_clean_data_simple(dist, n_samples, batch_size, dtype, seed)
+        return generate_and_clean_data_mirror(dist = dist, 
+                                              n_samples = n_samples, 
+                                              batch_size = batch_size, 
+                                              dtype = dtype, 
+                                              seed_generator = seed_generator)
     else:
-        return generate_and_clean_data_simple(dist, n_samples, batch_size, dtype, seed)
+        return generate_and_clean_data_simple(dist = dist, 
+                                              n_samples = n_samples, 
+                                              batch_size = batch_size, 
+                                              dtype = dtype, 
+                                              seed_generator = seed_generator)
