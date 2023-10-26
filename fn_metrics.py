@@ -21,14 +21,6 @@ from .base import TwoSampleTestResults
 from typing import Tuple, Union, Optional, Type, Dict, Any, List
 from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, IntType, DataTypeTF, DataTypeNP, DataType, DistTypeTF, DistTypeNP, DistType, DataDistTypeNP, DataDistTypeTF, DataDistType, BoolType
 
-# dist_1_cov = np.cov(dist_1_k,bias=True,rowvar=False)
-# dist_1_corr=correlation_from_covariance(dist_1_cov)
-# dist_2_cov = np.cov(dist_2_k,bias=True,rowvar=False)
-# dist_2_corr=correlation_from_covariance(dist_2_cov)    
-# matrix_sum=dist_1_corr-dist_2_corr
-# frob_norm=np.linalg.norm(matrix_sum, ord='fro')
-# fn_list.append(frob_norm)
-
 def correlation_from_covariance_np(covariance: np.ndarray) -> np.ndarray:
     """
     """
@@ -46,31 +38,31 @@ def correlation_from_covariance_tf(covariance: tf.Tensor) -> tf.Tensor:
     correlation = tf.where(tf.equal(covariance, 0), tf.constant(0, dtype=correlation.dtype), correlation)
     return correlation
 
-def fn_2samp_np(data1: np.ndarray,
-                data2: np.ndarray
-               ) -> np.ndarray:
+def fn_2samp_np(data1: DataTypeNP,
+                data2: DataTypeNP
+               ) -> DataTypeNP:
     """
     """
-    dist_1_cov = np.cov(data1, bias=True, rowvar=False)
-    dist_1_corr = correlation_from_covariance_np(dist_1_cov)
-    dist_2_cov = np.cov(data2, bias=True, rowvar=False)
-    dist_2_corr = correlation_from_covariance_np(dist_2_cov)
-    matrix_sum = dist_1_corr - dist_2_corr
-    frob_norm = np.linalg.norm(matrix_sum, ord='fro')
-    return frob_norm # type: ignore
+    dist_1_cov: DataTypeNP = np.cov(data1, bias=True, rowvar=False)
+    dist_1_corr: DataTypeNP = correlation_from_covariance_np(dist_1_cov)
+    dist_2_cov: DataTypeNP = np.cov(data2, bias=True, rowvar=False)
+    dist_2_corr: DataTypeNP = correlation_from_covariance_np(dist_2_cov)
+    matrix_sum: DataTypeNP = dist_1_corr - dist_2_corr
+    frob_norm: DataTypeNP = np.array(np.linalg.norm(matrix_sum, ord='fro'))
+    return frob_norm
 
 @tf.function(jit_compile=True, reduce_retracing = True)
-def fn_2samp_tf(data1: tf.Tensor, 
-                data2: tf.Tensor
-               ) -> tf.Tensor:
+def fn_2samp_tf(data1: DataTypeTF, 
+                data2: DataTypeTF
+               ) -> DataTypeTF:
     """
     """
-    dist_1_cov = tfp.stats.covariance(data1, sample_axis=0, event_axis=-1)
-    dist_1_corr = correlation_from_covariance_tf(dist_1_cov)
-    dist_2_cov = tfp.stats.covariance(data2, sample_axis=0, event_axis=-1)
-    dist_2_corr = correlation_from_covariance_tf(dist_2_cov)    
-    matrix_sum = tf.subtract(dist_1_corr, dist_2_corr)
-    frob_norm = tf.norm(matrix_sum, ord='fro', axis=[-2,-1])
+    dist_1_cov: DataTypeTF = tfp.stats.covariance(data1, sample_axis=0, event_axis=-1)
+    dist_1_corr: tf.Tensor = correlation_from_covariance_tf(dist_1_cov)
+    dist_2_cov: DataTypeTF = tfp.stats.covariance(data2, sample_axis=0, event_axis=-1)
+    dist_2_corr: tf.Tensor = correlation_from_covariance_tf(dist_2_cov)
+    matrix_sum: DataTypeTF = tf.subtract(dist_1_corr, dist_2_corr)
+    frob_norm: DataTypeTF = tf.norm(matrix_sum, ord='fro', axis=[-2,-1])
     return frob_norm
 
 class FNMetric(TwoSampleTestBase):
@@ -253,11 +245,23 @@ class FNMetric(TwoSampleTestBase):
             dtype: Union[type, np.dtype] = self.Inputs.dtype.as_numpy_dtype
         else:
             dtype = self.Inputs.dtype
-        seed: int = self.Inputs.seed
         dist_1_k: DataTypeNP
         dist_2_k: DataTypeNP
         
         # Utility functions
+        def set_dist_num_from_symb(dist: DistType,
+                                   nsamples: int,
+                                   dtype: Union[type, np.dtype],
+                                  ) -> DataTypeNP:
+            if isinstance(dist, tfp.distributions.Distribution):
+                dist_num_tmp: DataTypeTF = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+                dist_num: DataTypeNP = dist_num_tmp.numpy().astype(dtype) # type: ignore
+            elif isinstance(dist, NumpyDistribution):
+                dist_num = dist.sample(nsamples).astype(dtype = dtype)
+            else:
+                raise TypeError("dist must be either a tfp.distributions.Distribution or a NumpyDistribution object.")
+            return dist_num
+        
         def start_calculation() -> None:
             conditional_print(self.verbose, "\n------------------------------------------")
             conditional_print(self.verbose, "Starting FN metric calculation...")
@@ -287,7 +291,7 @@ class FNMetric(TwoSampleTestBase):
         start_calculation()
         init_progress_bar()
             
-        reset_random_seeds(seed = seed)
+        self.Inputs.reset_seed_generator()
         
         conditional_print(self.verbose, "Running numpy FN calculation...")
         for k in range(niter):
@@ -296,13 +300,13 @@ class FNMetric(TwoSampleTestBase):
                 dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             elif not np.shape(dist_1_num[0])[0] == 0 and np.shape(dist_2_num[0])[0] == 0:
                 dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
-                dist_2_k = np.array(dist_2_symb.sample(batch_size)).astype(dtype) # type: ignore
+                dist_2_k = set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype)
             elif np.shape(dist_1_num[0])[0] == 0 and not np.shape(dist_2_num[0])[0] == 0:
-                dist_1_k = np.array(dist_1_symb.sample(batch_size)).astype(dtype) # type: ignore
+                dist_1_k = set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype)
                 dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             else:
-                dist_1_k = np.array(dist_1_symb.sample(batch_size)).astype(dtype) # type: ignore
-                dist_2_k = np.array(dist_2_symb.sample(batch_size)).astype(dtype) # type: ignore
+                dist_1_k = set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype)
+                dist_2_k = set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype)
             frob_norm = fn_2samp_np(dist_1_k, dist_2_k)
             metric_list.append(frob_norm) # type: ignore
             update_progress_bar()
@@ -313,8 +317,8 @@ class FNMetric(TwoSampleTestBase):
         timestamp: str = datetime.now().isoformat()
         test_name: str = "FN Test_np"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "numpy"}}
-        result_value: Dict[str, DataTypeTF] = {"metric_list": np.array(metric_list)} # type: ignore
-        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
+        result_value: Dict[str, Optional[DataTypeNP]]  = {"metric_list": np.array(metric_list)}
+        result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
         self.Results.append(result)
         
     def Test_tf(self, max_vectorize: int = 100) -> None:
@@ -352,17 +356,16 @@ class FNMetric(TwoSampleTestBase):
         if isinstance(self.Inputs.dist_1_symb, tfp.distributions.Distribution):
             dist_1_symb: tfp.distributions.Distribution = self.Inputs.dist_1_symb
         else:
-            raise ValueError("dist_1_symb must be a tfp.distributions.Distribution object when use_tf is True.")
+            raise TypeError("dist_1_symb must be a tfp.distributions.Distribution object when use_tf is True.")
         if isinstance(self.Inputs.dist_2_symb, tfp.distributions.Distribution):
             dist_2_symb: tfp.distributions.Distribution = self.Inputs.dist_2_symb
         else:
-            raise ValueError("dist_2_symb must be a tfp.distributions.Distribution object when use_tf is True.")
+            raise TypeError("dist_2_symb must be a tfp.distributions.Distribution object when use_tf is True.")
         ndims: int = self.Inputs.ndims
         niter: int
         batch_size: int
         niter, batch_size = [int(i) for i in self.get_niter_batch_size_tf()] # type: ignore
         dtype: tf.DType = tf.as_dtype(self.Inputs.dtype)
-        seed: int = self.Inputs.seed
         
         # Utility functions
         def start_calculation() -> None:
@@ -387,7 +390,9 @@ class FNMetric(TwoSampleTestBase):
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
             
-        def batched_test(start, end):
+        def batched_test(start: tf.Tensor, 
+                         end: tf.Tensor
+                        ) -> DataTypeTF:
             # Define batched distributions
             dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
                                                true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)),
@@ -400,17 +405,17 @@ class FNMetric(TwoSampleTestBase):
             dist_2_k = tf.reshape(dist_2_k, (end-start, batch_size, ndims))
 
             # Define the loop body to vectorize over ndims*chunk_size
-            def loop_body_vmap(idx):
+            def loop_body(idx):
                 fron_norm = fn_2samp_tf(dist_1_k[idx, :, :], dist_2_k[idx, :, :]) # type: ignore
                 fron_norm = tf.cast(fron_norm, dtype=dtype)
                 return fron_norm
 
             # Vectorize over ndims*chunk_size
-            frob_norm_list = tf.vectorized_map(loop_body_vmap, tf.range(end-start)) # type: ignore
+            frob_norm_list: DataTypeTF = tf.vectorized_map(loop_body, tf.range(end-start)) # type: ignore
 
             return frob_norm_list
         
-        def compute_test(max_vectorize: int = 100) -> tf.Tensor:
+        def compute_test(max_vectorize: int = 100) -> DataTypeTF:
             # Check if numerical distributions are empty and print a warning if so
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
@@ -421,7 +426,7 @@ class FNMetric(TwoSampleTestBase):
             # Compute the maximum number of iterations per chunk
             max_iter_per_chunk: int = max_vectorize # type: ignore
             
-           # Compute the number of chunks
+            # Compute the number of chunks
             nchunks: int = int(tf.cast(tf.math.ceil(niter / max_iter_per_chunk), tf.int32)) # type: ignore
             conditional_tf_print(tf.logical_and(self.verbose,tf.logical_not(tf.equal(nchunks,1))), "nchunks =", nchunks) # type: ignore
 
@@ -437,21 +442,21 @@ class FNMetric(TwoSampleTestBase):
 
             _, res = tf.while_loop(lambda i, res: i < nchunks, body, [0, res])
             
-            res_stacked = tf.reshape(res.stack(), (niter,))
+            res_stacked: DataTypeTF = tf.reshape(res.stack(), (niter,))
 
             return res_stacked
 
         start_calculation()
         
-        reset_random_seeds(seed = seed)
+        self.Inputs.reset_seed_generator()
         
-        frob_norm = compute_test(max_vectorize = max_vectorize) # type: ignore
+        frob_norm: DataTypeTF = compute_test(max_vectorize = max_vectorize)
                              
         end_calculation()
         
         timestamp: str = datetime.now().isoformat()
         test_name: str = "FN Test_tf"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}}
-        result_value: Dict[str, Any] = {"metric_list": frob_norm.numpy()}
-        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
+        result_value: Dict[str, Optional[DataTypeNP]] = {"metric_list": frob_norm.numpy()}
+        result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
         self.Results.append(result)

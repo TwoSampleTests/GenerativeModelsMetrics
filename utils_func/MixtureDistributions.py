@@ -373,9 +373,9 @@ def transform_data(data: np.ndarray,
         data_new: np.ndarray, transformed data
     """
     if len(rotation.shape) != 2:
-        raise Exception('Rottion matrix must be a 2D matrix.')
+        raise ValueError('Rottion matrix must be a 2D matrix.')
     elif rotation.shape[0] != rotation.shape[1]:
-        raise Exception('Rotation matrix must be square.')
+        raise ValueError('Rotation matrix must be square.')
     data_new: np.ndarray = np.dot(data,rotation)
     return data_new
 
@@ -392,9 +392,9 @@ def inverse_transform_data(data: np.ndarray,
         data_new: np.ndarray, transformed data
     """
     if len(rotation.shape) != 2:
-        raise Exception('Rottion matrix must be a 2D matrix.')
+        raise ValueError('Rottion matrix must be a 2D matrix.')
     elif rotation.shape[0] != rotation.shape[1]:
-        raise Exception('Rotation matrix must be square.')
+        raise ValueError('Rotation matrix must be square.')
     data_new: np.ndarray = np.dot(data,np.transpose(rotation))
     return data_new
 
@@ -444,9 +444,9 @@ def is_pos_def(x: np.ndarray) -> bool:
         bool, True if 'x' is positive definite, False otherwise
     """
     if len(x.shape) != 2:
-        raise Exception('Input to is_pos_def must be a 2-dimensional array.')
+        raise ValueError('Input to is_pos_def must be a 2-dimensional array.')
     elif x.shape[0] != x.shape[1]:
-        raise Exception('Input to is_pos_def must be a square matrix.')
+        raise ValueError('Input to is_pos_def must be a square matrix.')
     return bool(np.all(np.linalg.eigvals(x) > 0))
 
 def RandCov(std: np.ndarray,

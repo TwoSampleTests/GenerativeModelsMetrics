@@ -36,7 +36,7 @@ class TwoSampleTestInputs(object):
                  niter: int = 10,
                  batch_size_test: int = 100000,
                  batch_size_gen: int = 1000,
-                 small_sample_threshold: int = 1e7,
+                 small_sample_threshold: float = 1e7,
                  dtype_input: DTypeType = np.float32,
                  seed_input: Optional[int] = None,
                  use_tf: bool = False,
@@ -49,9 +49,9 @@ class TwoSampleTestInputs(object):
         self._niter: int = niter
         self._batch_size_test: int = batch_size_test
         self._batch_size_gen: int = batch_size_gen
-        self._small_sample_threshold: int = small_sample_threshold
+        self._small_sample_threshold: int = int(small_sample_threshold)
         self._dtype_input: tf.DType = dtype_input
-        self._seed: int = seed_input or int(np.random.randint(0, 2**32 - 1))
+        self._seed: int = seed_input if seed_input is not None else int(np.random.randint(0, 2**32 - 1))
         self._use_tf: bool = use_tf
         self._mirror_strategy: bool = mirror_strategy
         self.verbose: bool = verbose
@@ -71,6 +71,7 @@ class TwoSampleTestInputs(object):
         self._nsamples: int
         self._dtype: DTypeType
         self._small_sample: bool
+        self._seed_generator: tf.random.Generator
         
         # Preprocessing
         self.__preprocess(verbose = verbose)
@@ -159,9 +160,9 @@ class TwoSampleTestInputs(object):
                               ) -> None:
           if isinstance(small_sample_threshold, int):
                 if small_sample_threshold > 0:
-                 self._small_sample_threshold = small_sample_threshold
+                    self._small_sample_threshold = small_sample_threshold
                 else:
-                 raise ValueError("small_sample_threshold must be positive")
+                    raise ValueError("small_sample_threshold must be positive")
           self.__preprocess(verbose = False)
         
     @property
@@ -366,7 +367,12 @@ class TwoSampleTestInputs(object):
             if isinstance(dist_input, (tf.Tensor, tfp.distributions.Distribution)):
                 if self.verbose:
                     print("Using numpy mode with TensorFlow inputs.")
-                return parse_input_dist_tf(dist_input = dist_input, verbose = verbose)
+                is_symb, dist_symb, dist_num, ndims, nsamples = parse_input_dist_tf(dist_input = dist_input, verbose = verbose)
+                is_symb = bool(is_symb)
+                dist_num = dist_num.numpy()
+                ndims = int(ndims) # type: ignore
+                nsamples = int(nsamples) # type: ignore
+                return is_symb, dist_symb, dist_num, ndims, nsamples
             elif isinstance(dist_input, (np.ndarray, NumpyDistribution)):
                 return parse_input_dist_np(dist_input = dist_input, verbose = verbose)
             else:
@@ -392,7 +398,7 @@ class TwoSampleTestInputs(object):
                                     ) -> None:
         self._is_symb_1, self._dist_1_symb, self._dist_1_num, self._ndims_1, self._nsamples_1 = self.__parse_input_dist(dist_input = self._dist_1_input, verbose = verbose)
         self._is_symb_2, self._dist_2_symb, self._dist_2_num, self._ndims_2, self._nsamples_2 = self.__parse_input_dist(dist_input = self._dist_2_input, verbose = verbose)
-        
+            
     def __check_set_dtype(self) -> None:
         self._dtype = self.__get_best_dtype(self.dtype_input, self.__get_best_dtype(self.dtype_1, self.dtype_2))
     
@@ -487,14 +493,19 @@ class TwoSampleTestInputs(object):
             self.__check_set_small_sample_np()
             
     def __check_set_distributions_np(self) -> None:
-        seed_dist_1  = int(1e6)  # Seed for distribution 1
-        seed_dist_2  = int(1e12)  # Seed for distribution 2
+        # Reset random seeds
         if self.is_symb_1:
             if self.small_sample:
                 if isinstance(self.dist_1_symb, NumpyDistribution):
+                    seed_dist_1 = int(self.seed_generator.make_seeds()[0,0].numpy()) # type: ignore
                     self._dist_1_num = self.dist_1_symb.sample(self.nsamples, seed = int(seed_dist_1)).astype(self.dtype)
                 elif isinstance(self._dist_1_symb, tfp.distributions.Distribution):
-                    self._dist_1_num = self.dist_1_symb.sample(self.nsamples, seed = int(seed_dist_1)).numpy().astype(self.dtype) # type: ignore
+                    if self.is_symb_2 and isinstance(self.dist_2_symb, tfp.distributions.Distribution):
+                        pass
+                    else:
+                        print("Generating dist_1_num with numpy function.")
+                        seed_dist_1 = int(self.seed_generator.make_seeds()[0,0].numpy()) # type: ignore
+                        self._dist_1_num = self._dist_1_symb.sample(self.nsamples, seed = int(seed_dist_1)).numpy().astype(self.dtype) # type: ignore
                 else:
                     raise ValueError("dist_1_symb should be a subclass of NumpyDistribution or tfp.distributions.Distribution.")
             else:
@@ -507,9 +518,15 @@ class TwoSampleTestInputs(object):
         if self.is_symb_2:
             if self.small_sample:
                 if isinstance(self.dist_2_symb, NumpyDistribution):
+                    seed_dist_2 = int(self.seed_generator.make_seeds()[0,0].numpy()) # type: ignore
                     self._dist_2_num = self.dist_2_symb.sample(self.nsamples, seed = int(seed_dist_2)).astype(self.dtype)
                 elif isinstance(self.dist_2_symb, tfp.distributions.Distribution):
-                    self._dist_2_num = self.dist_2_symb.sample(self.nsamples, seed = int(seed_dist_2)).numpy().astype(self.dtype) # type: ignore
+                    if self.is_symb_1 and isinstance(self.dist_1_symb, tfp.distributions.Distribution):
+                        pass
+                    else:
+                        print("Generating dist_2_num with numpy function.")
+                        seed_dist_2 = int(self.seed_generator.make_seeds()[0,0].numpy()) # type: ignore
+                        self._dist_2_num = self._dist_2_symb.sample(self.nsamples, seed = int(seed_dist_2)).numpy().astype(self.dtype) # type: ignore
                 else:
                     raise ValueError("dist_2_symb should be a subclass of NumpyDistribution or tfp.distributions.Distribution.")
             else:
@@ -519,6 +536,14 @@ class TwoSampleTestInputs(object):
                 self._dist_2_num = self.dist_2_num[:self.nsamples,:].astype(self.dtype)
             else:  
                 raise ValueError("dist_2_num should be an instance of np.ndarray or tf.Tensor.")
+        if self.is_symb_1 and self.is_symb_2:
+            if isinstance(self.dist_1_symb, tfp.distributions.Distribution) and isinstance(self.dist_2_symb, tfp.distributions.Distribution):
+                if self.small_sample:
+                    print("Generating dist_1_num and dist_2_num with tensorflow function.")
+                    self.__check_set_distributions_tf()
+                    self._dist_1_num = self.dist_1_num.numpy().astype(self.dtype) # type: ignore
+                    self._dist_2_num = self.dist_2_num.numpy().astype(self.dtype) # type: ignore
+                
             
     def __check_set_distributions_tf(self) -> None:
         # Utility functions
@@ -543,8 +568,6 @@ class TwoSampleTestInputs(object):
         
         print("Checking and setting numerical distributions.")
         
-        # Initialize seeds generator
-        
         dist_1_num = tf.cond(self.is_symb_1,
                              true_fn = lambda: tf.cond(self.small_sample,
                                                        true_fn = lambda: set_dist_num_from_symb(self.dist_1_symb),
@@ -565,18 +588,15 @@ class TwoSampleTestInputs(object):
         else:
             self.__check_set_distributions_np()
             
-    def __set_seed_generator(self) -> None:
-        # Set seeds generator for tensorflow backend
-        if self.use_tf:
-            self._seed_generator = tf.random.Generator.from_seed(self.seed)
-        
+    def reset_seed_generator(self) -> None:
+        # Reset seed and set seeds generator
+        reset_random_seeds(seed = self.seed)
+        self._seed_generator = tf.random.Generator.from_seed(self.seed)
+                
     def __preprocess(self, 
                      verbose: bool = False) -> None:
-        # Reset random seeds
-        reset_random_seeds(seed = self.seed)
-        
-        # Set generator
-        self.__set_seed_generator()
+        # Reset seed and set seeds generator
+        self.reset_seed_generator()
         
         # Parse input distributions
         self.__parse_input_distributions(verbose = verbose)
@@ -614,11 +634,11 @@ class TwoSampleTestResult:
                  timestamp: str,
                  test_name: str,
                  parameters: Dict[str, Any],
-                 result_value: Dict[str, Optional[DataType]]
+                 result_value: Dict[str, Optional[DataTypeNP]]
                 ) -> None:
         self.timestamp: str = timestamp
         self.test_name: str = test_name
-        self.result_value: Dict[str, Optional[DataType]] = result_value
+        self.result_value: Dict[str, Optional[DataTypeNP]] = result_value
         self.__dict__.update(parameters)
     
     def result_to_dataframe(self):
@@ -844,3 +864,82 @@ class TwoSampleTestBase(ABC):
     @abstractmethod
     def Test_tf(self) -> None:
         pass
+    
+
+class TwoSampleTestSlicedBase(TwoSampleTestBase):
+    """
+    Base class for metrics.
+    """
+    def __init__(self, 
+                 data_input: TwoSampleTestInputs,
+                 nslices: int = 100,
+                 seed_slicing: Optional[int] = None,
+                 progress_bar: bool = False,
+                 verbose: bool = False
+                ) -> None:
+        
+        # From base class
+        self._Inputs: TwoSampleTestInputs
+        self._progress_bar: bool
+        self._verbose: bool
+        self._start: float
+        self._end: float
+        self._pbar: tqdm
+        self._Results: TwoSampleTestResults
+        
+        # Initialize base class
+        super().__init__(data_input = data_input, 
+                         progress_bar = progress_bar,
+                         verbose = verbose)
+    
+        # From this class
+        self._seed_slicing: int = seed_slicing if seed_slicing is not None else int(self.Inputs.seed_generator.make_seeds(1)[0,0])
+        self._nslices: int = nslices
+        self._directions: DataTypeNP
+        
+        self.generate_directions()
+        
+    @property
+    def seed_slicing(self) -> int:
+        return self._seed_slicing
+    
+    @seed_slicing.setter
+    def seed_slicing(self, seed_slicing: int) -> None:
+        if isinstance(seed_slicing, int):
+            self._seed_slicing = seed_slicing
+            self.generate_directions()
+        else:
+            raise TypeError("seed_slicing must be an integer.")
+        
+    @property
+    def nslices(self) -> int:
+        return self._nslices
+    
+    @nslices.setter
+    def nslices(self, nslices: int) -> None:
+        if isinstance(nslices, int):
+            self._nslices = nslices
+            self.generate_directions()
+        else:
+            raise TypeError("nslices must be an integer.")
+        
+    @property
+    def directions(self) -> DataTypeNP:
+        return self._directions
+            
+    def generate_directions(self) -> None:
+        """
+        Function that generates random directions.
+        Directions are always generated with the numpy backend for reproducibility
+        """
+        print("Generating random directions based on nslices, ndims, and seed_slicing.")
+        ndims: int = self.Inputs.ndims
+        directions: DataTypeNP
+        reset_random_seeds(seed = self.seed_slicing)
+        directions = np.random.randn(self.nslices, self.Inputs.ndims)
+        directions /= np.linalg.norm(directions, axis=1)[:, None]
+        self._directions = directions
+    
+        
+        
+        

@@ -16,7 +16,7 @@ from .utils import conditional_tf_print
 from .utils import generate_and_clean_data
 from .utils import NumpyDistribution
 from .base import TwoSampleTestInputs
-from .base import TwoSampleTestBase
+from .base import TwoSampleTestSlicedBase
 from .base import TwoSampleTestResult
 from .base import TwoSampleTestResults
 from .ks_metrics import ks_2samp_tf
@@ -24,14 +24,13 @@ from .ks_metrics import ks_2samp_tf
 from typing import Tuple, Union, Optional, Type, Dict, Any, List
 from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, IntType, DataTypeTF, DataTypeNP, DataType, DistTypeTF, DistTypeNP, DistType, DataDistTypeNP, DataDistTypeTF, DataDistType, BoolType
 
-
 @tf.function(jit_compile=True, reduce_retracing=True)
 def sks_2samp_tf(data1: tf.Tensor, 
                  data2: tf.Tensor,
+                 directions_input: DataDistType,
                  alternative: str = 'two-sided',
                  method: str = 'auto',
                  precision: int = 100,
-                 nslices: int = 100
                 ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
     """
     Function that computes the sliced Kolmogorov-Smirnov distance between two samples using tensorflow functions.
@@ -50,6 +49,9 @@ def sks_2samp_tf(data1: tf.Tensor,
     data2: tf.Tensor, optional, shape = (n2,)
         Second sample. Sample sizes can be different.
         
+    directions_input: DataDistType
+        Random directions to use for the projection.
+        
     alternative: str, optional, default = 'two-sided'
         Defines the alternative hypothesis.
         
@@ -66,9 +68,6 @@ def sks_2samp_tf(data1: tf.Tensor,
         
     precision: int, optional, default = 100
         Number of points to use to discretize the CDFs.
-
-    nslices: int, optional, default = 100
-        Number of random directions to use for the projection.
 
     Returns:
     --------
@@ -93,10 +92,8 @@ def sks_2samp_tf(data1: tf.Tensor,
     # Compute ndims
     ndims = tf.shape(data1)[1]
     
-    # Generate random directions
-    directions = tf.random.normal((nslices, ndims))
-    directions /= tf.norm(directions, axis=1)[:, None]
-    directions = tf.cast(directions, dtype=data1.dtype)
+    # Cast random directions
+    directions = tf.cast(directions_input, dtype=data1.dtype)
     
     # Compute projections for all directions at once
     data1_proj = tf.tensordot(data1, directions, axes=[[1],[1]])
@@ -119,10 +116,10 @@ def sks_2samp_tf(data1: tf.Tensor,
     return sks_mean, sks_std, sks_proj # type: ignore
 
 
-class SKSTest(TwoSampleTestBase):
+class SKSTest(TwoSampleTestSlicedBase):
     """
     Class for computing the sliced Kolmogorov-Smirnov distance between two samples.
-    It inherits from the TwoSampleTestBase class.
+    It inherits from the TwoSampleTestSlicedBase class.
     The SKS test is computed by projecting the samples onto random directions,
     computing the Kolmogorov-Smirnov distance between the projections, and
     then taking the mean and standard deviation of the Kolmogorov-Smirnov distances.
@@ -229,6 +226,8 @@ class SKSTest(TwoSampleTestBase):
     """
     def __init__(self, 
                  data_input: TwoSampleTestInputs,
+                 nslices: int = 100,
+                 seed_slicing: Optional[int] = None,
                  progress_bar: bool = False,
                  verbose: bool = False
                 ) -> None:
@@ -240,13 +239,18 @@ class SKSTest(TwoSampleTestBase):
         self._end: float
         self._pbar: tqdm
         self._Results: TwoSampleTestResults
-    
+        self._seed_slicing: int
+        self._nslices: int
+        self._directions: DataTypeNP
+        
         super().__init__(data_input = data_input, 
+                         nslices = nslices,
+                         seed_slicing = seed_slicing,
                          progress_bar = progress_bar,
                          verbose = verbose)
         
     def compute(self, 
-                nslices: int = 100
+                max_vectorize: int = 100
                ) -> None:
         """
         Function that computes the sliced Kolmogorov-Smirnov distance between the two samples
@@ -263,13 +267,11 @@ class SKSTest(TwoSampleTestBase):
 
         """
         if self.use_tf:
-            self.Test_tf(nslices = nslices)
+            self.Test_tf(max_vectorize = max_vectorize)
         else:
-            self.Test_np(nslices = nslices)
+            self.Test_np()
     
-    def Test_np(self,
-                nslices: int = 100
-               ) -> None:
+    def Test_np(self) -> None:
         """
         Function that computes the sliced Kolmogorov-Smirnov distance between the two samples using numpy functions.
         The number of random directions used for the projection is given by nslices.
@@ -306,11 +308,23 @@ class SKSTest(TwoSampleTestBase):
             dtype: Union[type, np.dtype] = self.Inputs.dtype.as_numpy_dtype
         else:
             dtype = self.Inputs.dtype
-        seed: int = self.Inputs.seed
         dist_1_k: DataTypeNP
         dist_2_k: DataTypeNP
         
         # Utility functions
+        def set_dist_num_from_symb(dist: DistType,
+                                   nsamples: int,
+                                   dtype: Union[type, np.dtype],
+                                  ) -> DataTypeNP:
+            if isinstance(dist, tfp.distributions.Distribution):
+                dist_num_tmp: DataTypeTF = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+                dist_num: DataTypeNP = dist_num_tmp.numpy().astype(dtype) # type: ignore
+            elif isinstance(dist, NumpyDistribution):
+                dist_num = dist.sample(nsamples).astype(dtype = dtype)
+            else:
+                raise TypeError("dist must be either a tfp.distributions.Distribution or a NumpyDistribution object.")
+            return dist_num
+        
         def start_calculation() -> None:
             conditional_print(self.verbose, "\n------------------------------------------")
             conditional_print(self.verbose, "Starting SKS metric calculation...")
@@ -342,7 +356,7 @@ class SKSTest(TwoSampleTestBase):
         start_calculation()
         init_progress_bar()
             
-        reset_random_seeds(seed = seed)
+        self.Inputs.reset_seed_generator()
         
         conditional_print(self.verbose, "Running numpy SKS calculation...")
         for k in range(niter):
@@ -351,19 +365,16 @@ class SKSTest(TwoSampleTestBase):
                 dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             elif not np.shape(dist_1_num[0])[0] == 0 and np.shape(dist_2_num[0])[0] == 0:
                 dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
-                dist_2_k = np.array(dist_2_symb.sample(batch_size)).astype(dtype) # type: ignore
+                dist_2_k = set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype)
             elif np.shape(dist_1_num[0])[0] == 0 and not np.shape(dist_2_num[0])[0] == 0:
-                dist_1_k = np.array(dist_1_symb.sample(batch_size)).astype(dtype) # type: ignore
+                dist_1_k = set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype)
                 dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             else:
-                dist_1_k = np.array(dist_1_symb.sample(batch_size)).astype(dtype) # type: ignore
-                dist_2_k = np.array(dist_2_symb.sample(batch_size)).astype(dtype) # type: ignore
-            # Generate random directions
-            directions = np.random.randn(nslices, ndims)
-            directions /= np.linalg.norm(directions, axis=1)[:, None]
+                dist_1_k = set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype)
+                dist_2_k = set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype)
             # Compute sliced KS distance
             list1 = []
-            for direction in directions:
+            for direction in self.directions:
                 dist_1_proj = dist_1_k @ direction
                 dist_2_proj = dist_2_k @ direction
                 list1.append(ks_2samp(dist_1_proj, dist_2_proj)[0])
@@ -378,15 +389,13 @@ class SKSTest(TwoSampleTestBase):
         timestamp: str = datetime.now().isoformat()
         test_name: str = "SKS Test_np"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "numpy"}}
-        result_value: Dict[str, DataTypeTF] = {"metric_lists": np.array(metric_lists), # type: ignore
-                                               "metric_means": np.array(metric_means), # type: ignore
-                                               "metric_stds": np.array(metric_stds)} # type: ignore
-        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
+        result_value: Dict[str, Optional[DataTypeNP]] = {"metric_lists": np.array(metric_lists),
+                                                         "metric_means": np.array(metric_means),
+                                                         "metric_stds": np.array(metric_stds)}
+        result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
         self.Results.append(result)
         
-    def Test_tf(self,
-                nslices: int = 100
-               ) -> None:
+    def Test_tf(self, max_vectorize: int = 100) -> None:
         """
         Function that computes the sliced Kolmogorov-Smirnov distance between the two samples using tensorflow functions.
         The number of random directions used for the projection is given by nslices.
@@ -416,17 +425,16 @@ class SKSTest(TwoSampleTestBase):
         if isinstance(self.Inputs.dist_1_symb, tfp.distributions.Distribution):
             dist_1_symb: tfp.distributions.Distribution = self.Inputs.dist_1_symb
         else:
-            raise ValueError("dist_1_symb must be a tfp.distributions.Distribution object when use_tf is True.")
+            raise TypeError("dist_1_symb must be a tfp.distributions.Distribution object when use_tf is True.")
         if isinstance(self.Inputs.dist_2_symb, tfp.distributions.Distribution):
             dist_2_symb: tfp.distributions.Distribution = self.Inputs.dist_2_symb
         else:
-            raise ValueError("dist_2_symb must be a tfp.distributions.Distribution object when use_tf is True.")
+            raise TypeError("dist_2_symb must be a tfp.distributions.Distribution object when use_tf is True.")
         ndims: int = self.Inputs.ndims
         niter: int
         batch_size: int
         niter, batch_size = [int(i) for i in self.get_niter_batch_size_tf()] # type: ignore
         dtype: tf.DType = tf.as_dtype(self.Inputs.dtype)
-        seed: int = self.Inputs.seed
         
         # Utility functions
         def start_calculation() -> None:
@@ -444,84 +452,109 @@ class SKSTest(TwoSampleTestBase):
             
         def set_dist_num_from_symb(dist: DistTypeTF,
                                    nsamples: int,
-                                   seed: int = 0
                                   ) -> tf.Tensor:
-            nonlocal dtype
-            #dist_num: tf.Tensor = tf.cast(dist.sample(nsamples, seed = int(seed)), dtype = dtype) # type: ignore
-            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, 100, dtype = self.Inputs.dtype, seed = int(seed), mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
             return dist_num
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
+        
+        #@tf.function(jit_compile=True, reduce_retracing=True)
+        def batched_test(start: tf.Tensor, 
+                         end: tf.Tensor
+                        ) -> DataTypeTF:
+            # Define batched distributions
+            dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)),
+                                               false_fn = lambda: return_dist_num(dist_1_num[start*batch_size:end*batch_size, :])) # type: ignore
+            dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)),
+                                               false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
+
+            dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims))
+            dist_2_k = tf.reshape(dist_2_k, (end-start, batch_size, ndims))
+
+            # Define the loop body to vectorize over ndims*chunk_size
+            def loop_body(idx):
+                sks_mean, sks_std, sks_proj = sks_2samp_tf(dist_1_k[idx, :, :], dist_2_k[idx, :, :], directions_input = self.directions) # type: ignore
+                sks_mean = tf.cast(sks_mean, dtype = dtype)
+                sks_std = tf.cast(sks_std, dtype = dtype)
+                sks_proj = tf.cast(sks_proj, dtype = dtype)
+                return sks_mean, sks_std, sks_proj
+
+            # Vectorize over ndims*chunk_size
+            sks_mean, sks_std, sks_proj = tf.vectorized_map(loop_body, tf.range(end-start)) # type: ignore
+
+            sks_mean = tf.expand_dims(sks_mean, axis=1)
+            sks_std = tf.expand_dims(sks_std, axis=1)
+            
+            res: DataTypeTF = tf.concat([sks_mean, sks_std, sks_proj], axis=1) # type: ignore
+
+            return res
             
         #@tf.function(reduce_retracing=True)
-        def compute_test() -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        def compute_test(max_vectorize: int = 100) -> Tuple[DataTypeTF, DataTypeTF, DataTypeTF]:
             # Check if numerical distributions are empty and print a warning if so
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
             
+            # Ensure that max_vectorize is an integer larger than ndims
+            max_vectorize = int(tf.cast(tf.minimum(max_vectorize, niter),tf.int32)) # type: ignore
+
+            # Compute the maximum number of iterations per chunk
+            max_iter_per_chunk: int = max_vectorize # type: ignore
+            
+            # Compute the number of chunks
+            nchunks: int = int(tf.cast(tf.math.ceil(niter / max_iter_per_chunk), tf.int32)) # type: ignore
+            conditional_tf_print(tf.logical_and(self.verbose,tf.logical_not(tf.equal(nchunks,1))), "nchunks =", nchunks) # type: ignore
+
             # Initialize the result TensorArray
-            res = tf.TensorArray(dtype, size = niter)
-            res_sks_mean = tf.TensorArray(dtype, size = niter)
-            res_sks_std = tf.TensorArray(dtype, size = niter)
-            res_sks_proj = tf.TensorArray(dtype, size = niter)
+            res = tf.TensorArray(dtype, size = nchunks)
+            res_sks_mean = tf.TensorArray(dtype, size = nchunks)
+            res_sks_std = tf.TensorArray(dtype, size = nchunks)
+            res_sks_proj = tf.TensorArray(dtype, size = nchunks)
             
-            # Define unique constants for the two distributions. It is sufficient that these two are different to get different samples from the two distributions, if they are equal. 
-            # There is not problem with subsequent calls to the batched_test function, since the random state is updated at each call.
-            seed_dist_1  = int(1e6)  # Seed for distribution 1
-            seed_dist_2  = int(1e12)  # Seed for distribution 2
-    
             def body(i, res):
-                
-                # Define the loop body to vectorize over ndims*chunk_size
-                dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size, seed = seed_dist_1),
-                                               false_fn = lambda: return_dist_num(dist_1_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
-                dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size, seed = seed_dist_2),
-                                               false_fn = lambda: return_dist_num(dist_2_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
-                
-                sks_mean, sks_std, sks_proj = sks_2samp_tf(dist_1_k, dist_2_k, nslices = nslices) # type: ignore
-                sks_mean = tf.cast(sks_mean, dtype=dtype)
-                sks_std = tf.cast(sks_std, dtype=dtype)
-                sks_proj = tf.cast(sks_proj, dtype=dtype)
-        
-                # Here we add an extra dimension to `sks_mean` and `sks_std` tensors to match rank with `sks_proj`
-                sks_mean = tf.expand_dims(sks_mean, axis=0)
-                sks_std = tf.expand_dims(sks_std, axis=0)
-        
-                result_value = tf.concat([sks_mean, sks_std, sks_proj], axis=0)
-        
-                res = res.write(i, result_value)
+                start = i * max_iter_per_chunk
+                end = tf.minimum(start + max_iter_per_chunk, niter)
+                conditional_tf_print(tf.logical_and(tf.logical_or(tf.math.logical_not(tf.equal(start,0)),tf.math.logical_not(tf.equal(end,niter))), self.verbose), "Iterating from", start, "to", end, "out of", niter, ".") # type: ignore
+                chunk_result = batched_test(start, end) # type: ignore
+                res = res.write(i, chunk_result)
                 return i+1, res
-    
-            _, res = tf.while_loop(lambda i, _: i < niter, body, [0, res])
             
-            for i in range(niter):
+            def cond(i, res):
+                return i < nchunks
+            
+            _, res = tf.while_loop(cond, body, [0, res])
+
+            for i in range(nchunks):
                 res_i = res.read(i)
-                res_sks_mean = res_sks_mean.write(i, res_i[0])
-                res_sks_std = res_sks_std.write(i, res_i[1])
-                res_sks_proj = res_sks_proj.write(i, res_i[2:])
-            
-            sks_means = res_sks_mean.stack()
-            sks_stds = res_sks_std.stack()
-            sks_lists = res_sks_proj.stack()
+                res_sks_mean = res_sks_mean.write(i, res_i[:,0])
+                res_sks_std = res_sks_std.write(i, res_i[:,1])
+                res_sks_proj = res_sks_proj.write(i, res_i[:,2:])
+                
+            sks_means: DataTypeTF = tf.reshape(res_sks_mean.stack(), (niter,))
+            sks_stds: DataTypeTF = tf.reshape(res_sks_std.stack(), (niter,))
+            sks_lists: DataTypeTF = tf.reshape(res_sks_proj.stack(), (niter, -1))
                             
-            return sks_means, sks_stds, sks_lists # type: ignore
+            return sks_means, sks_stds, sks_lists
                 
         start_calculation()
         
-        reset_random_seeds(seed = seed)
+        self.Inputs.reset_seed_generator()
         
-        sks_means, sks_stds, sks_lists = compute_test() # type: ignore
+        sks_means: DataTypeTF
+        sks_stds: DataTypeTF
+        sks_lists: DataTypeTF
+        sks_means, sks_stds, sks_lists = compute_test(max_vectorize = max_vectorize)
                              
         end_calculation()
         
         timestamp: str = datetime.now().isoformat()
         test_name: str = "SKS Test_tf"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}}
-        result_value: Dict[str, Any] = {"metric_lists": sks_lists.numpy(),
-                                        "metric_means": sks_means.numpy(),
-                                        "metric_stds": sks_stds.numpy()}
-        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
+        result_value: Dict[str, Optional[DataTypeNP]] = {"metric_lists": sks_lists.numpy(),
+                                                         "metric_means": sks_means.numpy(),
+                                                         "metric_stds": sks_stds.numpy()}
+        result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
         self.Results.append(result)

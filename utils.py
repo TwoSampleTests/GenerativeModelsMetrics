@@ -83,7 +83,7 @@ class NumpyDistribution:
         if inspect.isroutine(method):
             return method(size=n, **self.params).astype(self.dtype)
         else:
-            raise ValueError(f"{self.distribution} is not a callable method of numpy.random.Generator.")
+            raise TypeError(f"{self.distribution} is not a callable method of numpy.random.Generator.")
 
 DistTypeNP = NumpyDistribution
 DistType = Union[tfp.distributions.Distribution, DistTypeNP]
@@ -240,13 +240,13 @@ def parse_input_dist_np(dist_input: DataDistTypeNP,
         nsamples, ndims = 0, dist_symb.sample(2).shape[1]
         is_symb = True
     else:
-        raise ValueError("Input must be either a numpy array or a NumpyDistribution object.")
+        raise TypeError("Input must be either a numpy array or a NumpyDistribution object.")
     return is_symb, dist_symb, dist_num, ndims, nsamples
 
 
 def parse_input_dist_tf(dist_input: DataDistType,
                         verbose: bool = False
-                       ) -> Tuple[BoolType, DistTypeTF, DataTypeTF, IntType, IntType]:
+                       ) -> Tuple[BoolType, DistTypeTF, DataTypeTF, IntType, IntType]: # type: ignore
     
     def is_ndarray_or_tensor():
         return tf.reduce_any([isinstance(dist_input, np.ndarray), tf.is_tensor(dist_input)])
@@ -337,7 +337,7 @@ def generate_and_clean_data_simple_1(dist: tfp.distributions.Distribution,
                 raise RuntimeError("Batch size is zero. Unable to generate samples.")
 
     samples = samples.concat()
-    return samples[:n_samples]
+    return samples[:n_samples] # type: ignore
 
 @tf.function(jit_compile=True, reduce_retracing=True)
 def generate_and_clean_data_simple_2(dist: tfp.distributions.Distribution,
@@ -394,7 +394,7 @@ def generate_and_clean_data_simple_2(dist: tfp.distributions.Distribution,
     return samples[:n_samples]
 
 def generate_and_clean_data_simple(*args, **kwargs):
-    return generate_and_clean_data_simple_1(*args, **kwargs)
+    return generate_and_clean_data_simple_1(*args, **kwargs) # type: ignore
 
 @tf.function(reduce_retracing=True)
 def generate_and_clean_data_mirror_1(dist: tfp.distributions.Distribution,
@@ -441,7 +441,7 @@ def generate_and_clean_data_mirror_1(dist: tfp.distributions.Distribution,
                     raise RuntimeError("Batch size is zero. Unable to generate samples.")
 
     samples = samples.concat()
-    return samples[:n_samples]
+    return samples[:n_samples] # type: ignore
 
 @tf.function(jit_compile=True, reduce_retracing=True)
 def generate_and_clean_data_mirror_2(dist: tfp.distributions.Distribution,
@@ -502,7 +502,7 @@ def generate_and_clean_data_mirror_2(dist: tfp.distributions.Distribution,
     return samples[:n_samples]
 
 def generate_and_clean_data_mirror(*args, **kwargs):
-    return generate_and_clean_data_mirror_1(*args, **kwargs)
+    return generate_and_clean_data_mirror_1(*args, **kwargs) # type: ignore
 
 def generate_and_clean_data(dist: tfp.distributions.Distribution,
                             n_samples: int,

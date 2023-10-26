@@ -19,61 +19,33 @@ from .base import TwoSampleTestResult
 from .base import TwoSampleTestResults
 
 from typing import Tuple, Union, Optional, Type, Dict, Any, List
+from numpy import typing as npt
 from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, IntType, DataTypeTF, DataTypeNP, DataType, DistTypeTF, DistTypeNP, DistType, DataDistTypeNP, DataDistTypeTF, DataDistType, BoolType
 
 
 def lr_statistic_np(logprob_ref_ref: DataTypeNP,
                     logprob_ref_alt: DataTypeNP,
                     logprob_alt_alt: DataTypeNP,
-                   ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    # Compute number of samples
-    n_ref = len(logprob_ref_ref)
-    n_alt = len(logprob_ref_alt)
-    
-    # Create masks for finite log probabilities
-    finite_indices_ref_ref = np.isfinite(logprob_ref_ref)
-    finite_indices_ref_alt = np.isfinite(logprob_ref_alt)
-    finite_indices_alt_alt = np.isfinite(logprob_alt_alt)
-    
-    # Count the number of finite samples
-    n_ref_finite = np.sum(finite_indices_ref_ref.astype(np.int32))
-    n_alt_finite = np.sum((finite_indices_alt_alt & finite_indices_ref_alt).astype(np.int32))
-
-    if n_ref_finite < n_ref:
-        fraction = (n_ref - n_ref_finite) / n_ref
-        print(f"Warning: Removed a fraction {fraction} of reference samples due to non-finite log probabilities.")
-        
-    if n_alt_finite < n_alt:
-        fraction = (n_alt - n_alt_finite) / n_alt
-        print(f"Warning: Removed a fraction {fraction} of alternative samples due to non-finite log probabilities.")
-    
-    # Combined finite indices
-    combined_finite_indices = finite_indices_ref_ref & finite_indices_ref_alt & finite_indices_alt_alt
-    
-    # Use masks to filter the reshaped log probabilities
-    logprob_ref_ref_filtered = np.where(combined_finite_indices, logprob_ref_ref, 0.)
-    logprob_ref_alt_filtered = np.where(combined_finite_indices, logprob_ref_alt, 0.)
-    logprob_alt_alt_filtered = np.where(combined_finite_indices, logprob_alt_alt, 0.)
+                   ) -> Tuple[np.float_, np.float_, np.float_, np.float_, np.float_]:
+    # Count the number of samples
+    n_ref: int = len(logprob_ref_ref)   
+    n_alt: int = len(logprob_ref_alt)
     
     # Compute log likelihoods
-    logprob_ref_ref_sum = np.sum(logprob_ref_ref_filtered)
-    logprob_ref_alt_sum = np.sum(logprob_ref_alt_filtered)
-    logprob_alt_alt_sum = np.sum(logprob_alt_alt_filtered)
-    lik_ref_dist = logprob_ref_ref_sum + logprob_ref_alt_sum
-    lik_alt_dist = logprob_ref_ref_sum + logprob_alt_alt_sum
+    logprob_ref_ref_sum: np.float_ = np.sum(logprob_ref_ref)
+    logprob_ref_alt_sum: np.float_ = np.sum(logprob_ref_alt)
+    logprob_alt_alt_sum: np.float_ = np.sum(logprob_alt_alt)
+    lik_ref_dist: np.float_ = logprob_ref_ref_sum + logprob_ref_alt_sum
+    lik_alt_dist: np.float_ = logprob_ref_ref_sum + logprob_alt_alt_sum
     
     # Compute likelihood ratio statistic
-    lik_ratio = 2 * (lik_alt_dist - lik_ref_dist)
-    
-    # Casting to float32 before performing division
-    n_ref_finite_float = float(n_ref_finite)
-    n_alt_finite_float = float(n_alt_finite)
+    lik_ratio: np.float_ = 2 * (lik_alt_dist - lik_ref_dist)
 
     # Compute normalized likelihood ratio statistic
-    n = 2 * n_ref_finite_float * n_alt_finite_float / (n_ref_finite_float + n_alt_finite_float)
+    n: float = 2 * n_ref * n_alt / (n_ref + n_alt)
     
     # Compute normalized likelihood ratio statistic
-    lik_ratio_norm = lik_ratio / np.sqrt(n)
+    lik_ratio_norm: np.float_ = lik_ratio / np.sqrt(n)
     
     return logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm
 
@@ -84,53 +56,30 @@ def lr_statistic_np(logprob_ref_ref: DataTypeNP,
 def lr_statistic_tf(logprob_ref_ref: DataTypeTF,
                     logprob_ref_alt: DataTypeTF,
                     logprob_alt_alt: DataTypeTF
-                   ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
-    # Compute number of samples
-    n_ref = tf.shape(logprob_ref_ref)[0] # type: ignore
-    n_alt = tf.shape(logprob_ref_alt)[0] # type: ignore
-        
-    # Create masks for finite log probabilities
-    finite_indices_ref_ref = tf.math.is_finite(logprob_ref_ref)
-    finite_indices_ref_alt = tf.math.is_finite(logprob_ref_alt)
-    finite_indices_alt_alt = tf.math.is_finite(logprob_alt_alt)
-    
-    # Count the number of finite samples
-    n_ref_finite = tf.reduce_sum(tf.cast(finite_indices_ref_ref, tf.int32))
-    n_alt_finite = tf.reduce_sum(tf.cast(tf.math.logical_and(finite_indices_alt_alt, finite_indices_ref_alt), tf.int32))
-
-    #if n_ref_finite < n_ref:
-    #    tf.print("Warning: Removed a fraction of reference samples due to non-finite log probabilities.")
-        
-    #if n_alt_finite < n_alt:
-    #    tf.print(f"Warning: Removed a fraction of alternative samples due to non-finite log probabilities.")
-    
-    # Combined finite indices
-    combined_finite_indices = tf.math.logical_and(tf.math.logical_and(finite_indices_ref_ref, finite_indices_ref_alt), finite_indices_alt_alt)
-    
-    # Use masks to filter the reshaped log probabilities
-    logprob_ref_ref_filtered = tf.where(combined_finite_indices, logprob_ref_ref, 0.)
-    logprob_ref_alt_filtered = tf.where(combined_finite_indices, logprob_ref_alt, 0.)
-    logprob_alt_alt_filtered = tf.where(combined_finite_indices, logprob_alt_alt, 0.)
+                   ) -> Tuple[DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF]:
+    # Count the number of samples
+    n_ref: tf.Tensor = tf.cast(len(logprob_ref_ref), dtype = tf.int32) # type: ignore
+    n_alt: tf.Tensor = tf.cast(len(logprob_ref_alt), dtype = tf.int32) # type: ignore
     
     # Compute log likelihoods
-    logprob_ref_ref_sum = tf.reduce_sum(logprob_ref_ref_filtered)
-    logprob_ref_alt_sum = tf.reduce_sum(logprob_ref_alt_filtered)
-    logprob_alt_alt_sum = tf.reduce_sum(logprob_alt_alt_filtered)
-    lik_ref_dist = logprob_ref_ref_sum + logprob_ref_alt_sum
-    lik_alt_dist = logprob_ref_ref_sum + logprob_alt_alt_sum
+    logprob_ref_ref_sum: DataTypeTF = tf.reduce_sum(logprob_ref_ref)
+    logprob_ref_alt_sum: DataTypeTF = tf.reduce_sum(logprob_ref_alt)
+    logprob_alt_alt_sum: DataTypeTF = tf.reduce_sum(logprob_alt_alt)
+    lik_ref_dist: DataTypeTF = logprob_ref_ref_sum + logprob_ref_alt_sum # type: ignore
+    lik_alt_dist: DataTypeTF = logprob_ref_ref_sum + logprob_alt_alt_sum # type: ignore
     
     # Compute likelihood ratio statistic
-    lik_ratio = 2 * (lik_alt_dist - lik_ref_dist)
+    lik_ratio: DataTypeTF = 2 * (lik_alt_dist - lik_ref_dist) # type: ignore
     
     # Casting to float32 before performing division
-    n_ref_finite_float = tf.cast(n_ref_finite, tf.float32)
-    n_alt_finite_float = tf.cast(n_alt_finite, tf.float32)  
+    n_ref_float: tf.Tensor = tf.cast(n_ref, dtype = tf.float32) # type: ignore
+    n_alt_float: tf.Tensor = tf.cast(n_alt, dtype = tf.float32) # type: ignore
 
     # Compute normalized likelihood ratio statistic
-    n = 2 * n_ref_finite_float * n_alt_finite_float / (n_ref_finite_float + n_alt_finite_float) # type: ignore
+    n: tf.Tensor = 2 * n_ref_float * n_alt_float / (n_ref_float + n_alt_float) # type: ignore
     
     # Compute normalized likelihood ratio statistic
-    lik_ratio_norm = lik_ratio / tf.sqrt(tf.cast(n, lik_ratio.dtype)) # type: ignore
+    lik_ratio_norm: DataTypeTF = lik_ratio / tf.sqrt(tf.cast(n, lik_ratio.dtype)) # type: ignore
     
     return logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm
 
@@ -302,9 +251,9 @@ class LRMetric(TwoSampleTestBase):
                                                              "logprob_alt_alt_sum_list": None,
                                                              "lik_ratio_list": None,
                                                              "lik_ratio_norm_list": None} # type: ignore
-            result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
+            result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
             self.Results.append(result)
-            raise ValueError("LR metric can be computed only if the inputs are symbolic tfd.Distribution objects. Metric result has been set to `None`.")
+            raise TypeError("LR metric can be computed only if the inputs are symbolic tfd.Distribution objects. Metric result has been set to `None`.")
         
         # Set alias for inputs
         if isinstance(self.Inputs.dist_1_symb, tfp.distributions.Distribution):
@@ -333,11 +282,34 @@ class LRMetric(TwoSampleTestBase):
             dtype: Union[type, np.dtype] = self.Inputs.dtype.as_numpy_dtype
         else:
             dtype = self.Inputs.dtype
-        seed: int = self.Inputs.seed
-        dist_1_k: tf.Tensor
-        dist_2_k: tf.Tensor
+        dist_1_k: DataTypeTF
+        dist_2_k: DataTypeTF
+        logprob_ref_ref_filtered: DataTypeNP
+        logprob_ref_alt_filtered: DataTypeNP
+        logprob_alt_alt_filtered: DataTypeNP
+        logprob_ref_ref_filtered_extra: DataTypeNP
+        logprob_ref_alt_filtered_extra: DataTypeNP
+        logprob_alt_alt_filtered_extra: DataTypeNP
+        logprob_ref_ref_sum: np.float_
+        logprob_ref_alt_sum: np.float_
+        logprob_alt_alt_sum: np.float_
+        lik_ratio: np.float_
+        lik_ratio_norm: np.float_
         
         # Utility functions
+        def set_dist_num_from_symb(dist: DistType,
+                                   nsamples: int,
+                                   dtype: Union[type, np.dtype],
+                                  ) -> DataTypeNP:
+            if isinstance(dist, tfp.distributions.Distribution):
+                dist_num_tmp: DataTypeTF = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+                dist_num: DataTypeNP = dist_num_tmp.numpy().astype(dtype) # type: ignore
+            elif isinstance(dist, NumpyDistribution):
+                dist_num = dist.sample(nsamples).astype(dtype = dtype)
+            else:
+                raise TypeError("dist must be either a tfp.distributions.Distribution or a NumpyDistribution object.")
+            return dist_num
+        
         def start_calculation() -> None:
             conditional_print(self.verbose, "\n------------------------------------------")
             conditional_print(self.verbose, "Starting LR metric calculation...")
@@ -362,18 +334,45 @@ class LRMetric(TwoSampleTestBase):
             self._end = timer()
             conditional_print(self.verbose, "Two-sample test calculation completed in "+str(self.end-self.start)+" seconds.")
                 
-        logprob_ref_ref_sum_list: List[DataTypeNP] = []
-        logprob_ref_alt_sum_list: List[DataTypeNP] = []
-        logprob_alt_alt_sum_list: List[DataTypeNP] = []
-        lik_ratio_list: List[DataTypeNP] = []
-        lik_ratio_norm_list: List[DataTypeNP] = []
+        logprob_ref_ref_sum_list: List[np.float_] = []
+        logprob_ref_alt_sum_list: List[np.float_] = []
+        logprob_alt_alt_sum_list: List[np.float_] = []
+        lik_ratio_list: List[np.float_] = []
+        lik_ratio_norm_list: List[np.float_] = []
 
         start_calculation()
         init_progress_bar()
             
-        reset_random_seeds(seed = seed)
+        self.Inputs.reset_seed_generator()
         
         conditional_print(self.verbose, "Running numpy LR calculation...")
+        
+        def get_logprobs(dist_1_num: DataType,
+                         dist_2_num: DataType,
+                         dist_1_symb: tfp.distributions.Distribution,
+                         dist_2_symb: tfp.distributions.Distribution
+                        ) -> Tuple[DataTypeNP, DataTypeNP, DataTypeNP]:
+            # Convert to numpy arrays
+            dist_1_num_np: DataTypeNP = np.array(dist_1_num) # type: ignore
+            dist_2_num_np: DataTypeNP = np.array(dist_2_num) # type: ignore
+            
+            # Compute log probabilities
+            logprob_ref_ref: DataTypeNP = dist_1_symb.log_prob(dist_1_num_np).numpy() # type: ignore
+            logprob_ref_alt: DataTypeNP = dist_1_symb.log_prob(dist_2_num_np).numpy() # type: ignore
+            logprob_alt_alt: DataTypeNP = dist_2_symb.log_prob(dist_2_num_np).numpy() # type: ignore
+            
+            # Create masks for finite log probabilities
+            finite_indices_ref_ref: npt.NDArray[np.bool_] = np.isfinite(logprob_ref_ref)
+            finite_indices_ref_alt: npt.NDArray[np.bool_] = np.isfinite(logprob_ref_alt)
+            finite_indices_alt_alt: npt.NDArray[np.bool_] = np.isfinite(logprob_alt_alt)
+            combined_finite_indices: npt.NDArray[np.bool_] = finite_indices_ref_ref & finite_indices_ref_alt & finite_indices_alt_alt
+                        
+            # Extract finite log probabilities
+            logprob_ref_ref_filtered: DataTypeNP = logprob_ref_ref[combined_finite_indices]
+            logprob_ref_alt_filtered: DataTypeNP = logprob_ref_alt[combined_finite_indices]
+            logprob_alt_alt_filtered: DataTypeNP = logprob_alt_alt[combined_finite_indices]
+            
+            return logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered
         
         for k in range(niter):
             if not np.shape(dist_1_num[0])[0] == 0 and not np.shape(dist_2_num[0])[0] == 0:
@@ -381,19 +380,55 @@ class LRMetric(TwoSampleTestBase):
                 dist_2_k = tf.convert_to_tensor(dist_2_num[k*batch_size:(k+1)*batch_size,:])
             elif not np.shape(dist_1_num[0])[0] == 0 and np.shape(dist_2_num[0])[0] == 0:
                 dist_1_k = tf.convert_to_tensor(dist_1_num[k*batch_size:(k+1)*batch_size,:])
-                dist_2_k = tf.cast(dist_2_symb.sample(batch_size), dtype = dtype) # type: ignore
+                dist_2_k = tf.cast(set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
             elif np.shape(dist_1_num[0])[0] == 0 and not np.shape(dist_2_num[0])[0] == 0:
-                dist_1_k = tf.cast(dist_1_symb.sample(batch_size), dtype = dtype) # type: ignore
+                dist_1_k = tf.cast(set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
                 dist_2_k = tf.convert_to_tensor(dist_2_num[k*batch_size:(k+1)*batch_size,:])
             else:
-                dist_1_k = tf.cast(dist_1_symb.sample(batch_size), dtype = dtype) # type: ignore
-                dist_2_k = tf.cast(dist_2_symb.sample(batch_size), dtype = dtype) # type: ignore
-            logprob_ref_ref = dist_1_symb.log_prob(dist_1_k).numpy() # type: ignore
-            logprob_ref_alt = dist_1_symb.log_prob(dist_2_k).numpy() # type: ignore
-            logprob_alt_alt = dist_2_symb.log_prob(dist_2_k).numpy() # type: ignore
-            logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm = lr_statistic_np(logprob_ref_ref, 
-                                                                                                                       logprob_ref_alt, 
-                                                                                                                       logprob_alt_alt)
+                dist_1_k = tf.cast(set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
+                dist_2_k = tf.cast(set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
+                
+            # Compute log probabilities
+            logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered = get_logprobs(dist_1_num = dist_1_k,
+                                                                                                        dist_2_num = dist_2_k,
+                                                                                                        dist_1_symb = dist_1_symb, # type: ignore
+                                                                                                        dist_2_symb = dist_2_symb) # type: ignore
+            
+            # Count the number of finite samples
+            n_finite: int = len(logprob_ref_ref_filtered)
+            
+            max_iter: int = 100
+            iter: int = 0
+            
+            while n_finite < batch_size and iter < max_iter:
+                iter += 1
+                num_missing: int = batch_size - n_finite
+                fraction: float = num_missing / batch_size
+                print(f"Warning: Removed a fraction {fraction} of samples due to non-finite log probabilities.")
+                
+                # Generate extra samples
+                dist_1_k_extra: tf.Tensor = tf.cast(dist_1_symb.sample(num_missing), dtype=dtype)  # type: ignore
+                dist_2_k_extra: tf.Tensor = tf.cast(dist_2_symb.sample(num_missing), dtype=dtype)  # type: ignore
+                
+                # Compute log probabilities
+                logprob_ref_ref_filtered_extra, logprob_ref_alt_filtered_extra, logprob_alt_alt_filtered_extra = get_logprobs(dist_1_num = dist_1_k_extra,
+                                                                                                                              dist_2_num = dist_2_k_extra,
+                                                                                                                              dist_1_symb = dist_1_symb, # type: ignore
+                                                                                                                              dist_2_symb = dist_2_symb) # type: ignore
+                                
+                # Append extra samples to the filtered log probabilities
+                n_finite_extra: int = len(logprob_ref_ref_filtered_extra)
+                if n_finite_extra > 0:
+                    logprob_ref_ref_filtered = np.concatenate([logprob_ref_ref_filtered, logprob_ref_ref_filtered_extra])
+                    logprob_ref_alt_filtered = np.concatenate([logprob_ref_alt_filtered, logprob_ref_alt_filtered_extra])
+                    logprob_alt_alt_filtered = np.concatenate([logprob_alt_alt_filtered, logprob_alt_alt_filtered_extra])
+                    
+                # Count the number of finite samples
+                n_finite = len(logprob_ref_ref_filtered)
+            
+            logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm = lr_statistic_np(logprob_ref_ref_filtered,
+                                                                                                                       logprob_ref_alt_filtered, 
+                                                                                                                       logprob_alt_alt_filtered) # type: ignore
             logprob_ref_ref_sum_list.append(logprob_ref_ref_sum)
             logprob_ref_alt_sum_list.append(logprob_ref_alt_sum)
             logprob_alt_alt_sum_list.append(logprob_alt_alt_sum)
@@ -412,7 +447,7 @@ class LRMetric(TwoSampleTestBase):
                         "logprob_alt_alt_sum_list": np.array(logprob_alt_alt_sum_list),
                         "lik_ratio_list": np.array(lik_ratio_list),
                         "lik_ratio_norm_list": np.array(lik_ratio_norm_list)} # type: ignore
-        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
+        result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
         self.Results.append(result)
         
     def Test_tf(self) -> None:
@@ -444,9 +479,9 @@ class LRMetric(TwoSampleTestBase):
                                                              "logprob_alt_alt_sum_list": None,
                                                              "lik_ratio_list": None,
                                                              "lik_ratio_norm_list": None} # type: ignore
-            result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
+            result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
             self.Results.append(result)
-            raise ValueError("LR metric can be computed only if the inputs are symbolic tfd.Distribution objects. Metric result has been set to `None`.")
+            raise TypeError("LR metric can be computed only if the inputs are symbolic tfd.Distribution objects. Metric result has been set to `None`.")
         
         # Set alias for inputs
         if isinstance(self.Inputs.dist_1_symb, tfp.distributions.Distribution):
@@ -472,7 +507,6 @@ class LRMetric(TwoSampleTestBase):
         batch_size: int
         niter, batch_size = [int(i) for i in self.get_niter_batch_size_tf()] # type: ignore
         dtype: tf.DType = tf.as_dtype(self.Inputs.dtype)
-        seed: int = self.Inputs.seed
         
         # Utility functions
         def start_calculation() -> None:
@@ -497,59 +531,155 @@ class LRMetric(TwoSampleTestBase):
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
         
+        def get_logprobs(dist_1_num: DataTypeTF,
+                         dist_2_num: DataTypeTF,
+                         dist_1_symb: tfp.distributions.Distribution,
+                         dist_2_symb: tfp.distributions.Distribution
+                        ) -> Tuple[DataTypeTF, DataTypeTF, DataTypeTF]:
+            # Compute log probabilities
+            logprob_ref_ref: DataTypeTF = dist_1_symb.log_prob(dist_1_num)
+            logprob_ref_alt: DataTypeTF = dist_1_symb.log_prob(dist_2_num)
+            logprob_alt_alt: DataTypeTF = dist_2_symb.log_prob(dist_2_num)
+            
+            # Create masks for finite log probabilities
+            finite_indices_ref_ref: tf.Tensor = tf.math.is_finite(logprob_ref_ref) # type: ignore
+            finite_indices_ref_alt: tf.Tensor = tf.math.is_finite(logprob_ref_alt) # type: ignore
+            finite_indices_alt_alt: tf.Tensor = tf.math.is_finite(logprob_alt_alt) # type: ignore
+            combined_finite_indices: tf.Tensor = tf.logical_and(tf.logical_and(finite_indices_ref_ref, finite_indices_ref_alt), finite_indices_alt_alt) # type: ignore
+                        
+            # Extract finite log probabilities
+            logprob_ref_ref_filtered: DataTypeTF = logprob_ref_ref[combined_finite_indices] # type: ignore
+            logprob_ref_alt_filtered: DataTypeTF = logprob_ref_alt[combined_finite_indices] # type: ignore
+            logprob_alt_alt_filtered: DataTypeTF = logprob_alt_alt[combined_finite_indices] # type: ignore
+            
+            return logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered
+        
         #@tf.function(reduce_retracing=True)
-        def compute_test() -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
+        def compute_test() -> Tuple[DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF]:
             # Check if numerical distributions are empty and print a warning if so
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
             
             # Initialize the result TensorArray
-            res = tf.TensorArray(dtype, size = niter)
+            res: tf.TensorArray = tf.TensorArray(dtype, size = niter)
+            logprob_ref_ref_sum = tf.TensorArray(dtype, size = niter)
+            logprob_ref_alt_sum = tf.TensorArray(dtype, size = niter)
+            logprob_alt_alt_sum = tf.TensorArray(dtype, size = niter)
+            lik_ratio = tf.TensorArray(dtype, size = niter)
+            lik_ratio_norm = tf.TensorArray(dtype, size = niter)
             
             def body(i, res):
                 # Define the loop body to vectorize over ndims*chunk_size
-                dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                dist_1_k: DataTypeTF = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
                                                true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size), # type: ignore
                                                false_fn = lambda: return_dist_num(dist_1_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
-                dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                dist_2_k: DataTypeTF = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
                                                true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size), # type: ignore
                                                false_fn = lambda: return_dist_num(dist_2_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
-                logprob_ref_ref = dist_1_symb.log_prob(dist_1_k) # type: ignore
-                logprob_ref_alt = dist_1_symb.log_prob(dist_2_k) # type: ignore
-                logprob_alt_alt = dist_2_symb.log_prob(dist_2_k) # type: ignore
-                logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm = lr_statistic_tf(logprob_ref_ref, 
-                                                                                                                           logprob_ref_alt, 
-                                                                                                                           logprob_alt_alt) # type: ignore
-                logprob_ref_ref_sum = tf.cast(logprob_ref_ref_sum, dtype=dtype)
-                logprob_ref_alt_sum = tf.cast(logprob_ref_alt_sum, dtype=dtype)
-                logprob_alt_alt_sum = tf.cast(logprob_alt_alt_sum, dtype=dtype)
-                lik_ratio = tf.cast(lik_ratio, dtype=dtype)
-                lik_ratio_norm = tf.cast(lik_ratio_norm, dtype=dtype)
                 
-                result_value = tf.stack([logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm]) # type: ignore
+                # Compute log probabilities
+                logprob_ref_ref_filtered: DataTypeTF
+                logprob_ref_alt_filtered: DataTypeTF
+                logprob_alt_alt_filtered: DataTypeTF
+                logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered = get_logprobs(dist_1_num = dist_1_k, 
+                                                                                                            dist_2_num = dist_2_k, 
+                                                                                                            dist_1_symb = dist_1_symb, # type: ignore
+                                                                                                            dist_2_symb = dist_2_symb) # type: ignore
+                
+                # Count the number of finite samples
+                n_finite: tf.Tensor = tf.shape(logprob_ref_ref_filtered)[0]
+                
+                max_iter: int = 100
+                iter: int = 0
+                
+                while n_finite < batch_size and iter < max_iter:
+                    iter += 1
+                    num_missing: int = batch_size - n_finite
+                    fraction: float = num_missing / batch_size
+                    print(f"Warning: Removed a fraction {fraction} of samples due to non-finite log probabilities.")
+                    
+                    # Generate extra samples
+                    dist_1_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_1_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+                    dist_2_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_2_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+                    
+                    # Compute log probabilities
+                    logprob_ref_ref_filtered_extra: DataTypeTF
+                    logprob_ref_alt_filtered_extra: DataTypeTF
+                    logprob_alt_alt_filtered_extra: DataTypeTF
+                    logprob_ref_ref_filtered_extra, logprob_ref_alt_filtered_extra, logprob_alt_alt_filtered_extra = get_logprobs(dist_1_num = dist_1_k_extra,
+                                                                                                                                  dist_2_num = dist_2_k_extra,
+                                                                                                                                  dist_1_symb = dist_1_symb, # type: ignore
+                                                                                                                                  dist_2_symb = dist_2_symb) # type: ignore
+                                    
+                    # Append extra samples to the filtered log probabilities
+                    n_finite_extra: tf.Tensor = tf.shape(logprob_ref_ref_filtered_extra)[0]
+                    if n_finite_extra > 0:
+                        logprob_ref_ref_filtered = tf.concat([logprob_ref_ref_filtered, logprob_ref_ref_filtered_extra], axis = 0) # type: ignore
+                        logprob_ref_alt_filtered = tf.concat([logprob_ref_alt_filtered, logprob_ref_alt_filtered_extra], axis = 0) # type: ignore
+                        logprob_alt_alt_filtered = tf.concat([logprob_alt_alt_filtered, logprob_alt_alt_filtered_extra], axis = 0) # type: ignore
+                        
+                    # Count the number of finite samples
+                    n_finite: tf.Tensor = tf.shape(logprob_ref_ref_filtered)[0]
+                
+                logprob_ref_ref_sum: DataTypeTF
+                logprob_ref_alt_sum: DataTypeTF
+                logprob_alt_alt_sum: DataTypeTF
+                lik_ratio: DataTypeTF
+                lik_ratio_norm: DataTypeTF
+                logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm = lr_statistic_tf(logprob_ref_ref_filtered, 
+                                                                                                                           logprob_ref_alt_filtered, 
+                                                                                                                           logprob_alt_alt_filtered) # type: ignore
+                logprob_ref_ref_sum = tf.cast(logprob_ref_ref_sum, dtype = dtype) # type: ignore
+                logprob_ref_alt_sum = tf.cast(logprob_ref_alt_sum, dtype = dtype) # type: ignore
+                logprob_alt_alt_sum = tf.cast(logprob_alt_alt_sum, dtype = dtype) # type: ignore
+                lik_ratio = tf.cast(lik_ratio, dtype = dtype) # type: ignore
+                lik_ratio_norm = tf.cast(lik_ratio_norm, dtype = dtype) # type: ignore
+                
+                #result_value: DataTypeTF = tf.stack([logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm]) # type: ignore
+                
+                result_value: DataTypeTF = tf.concat([logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm], axis=0) # type: ignore
                 
                 res = res.write(i, result_value)
                 return i+1, res
     
             _, res = tf.while_loop(lambda i, _: i < niter, body, [0, res])
+            
+            for i in range(niter):
+                res_i = res.read(i)
+                logprob_ref_ref_sum = logprob_ref_ref_sum.write(i, res_i[0])
+                logprob_ref_alt_sum = logprob_ref_alt_sum.write(i, res_i[1])
+                logprob_alt_alt_sum = logprob_alt_alt_sum.write(i, res_i[2])
+                lik_ratio = lik_ratio.write(i, res_i[3])
+                lik_ratio_norm = lik_ratio_norm.write(i, res_i[4])
+                
+            logprob_ref_ref_sum_stacked: DataTypeTF = tf.reshape(logprob_ref_ref_sum.stack(), [-1])
+            logprob_ref_alt_sum_stacked: DataTypeTF = tf.reshape(logprob_ref_alt_sum.stack(), [-1])
+            logprob_alt_alt_sum_stacked: DataTypeTF = tf.reshape(logprob_alt_alt_sum.stack(), [-1])
+            lik_ratio_stacked: DataTypeTF = tf.reshape(lik_ratio.stack(), [-1])
+            lik_ratio_norm_stacked: DataTypeTF = tf.reshape(lik_ratio_norm.stack(), [-1])
         
-            return tf.transpose(res.stack()) # type: ignore
+            return logprob_ref_ref_sum_stacked, logprob_ref_alt_sum_stacked, logprob_alt_alt_sum_stacked, lik_ratio_stacked, lik_ratio_norm_stacked
 
         start_calculation()
         
-        reset_random_seeds(seed = seed)
+        self.Inputs.reset_seed_generator()
         
-        logprob_ref_ref_sum_list, logprob_ref_alt_sum_list, logprob_alt_alt_sum_list, lik_ratio_list, lik_ratio_norm_list = compute_test() # type: ignore
+        logprob_ref_ref_sum_list: DataTypeTF
+        logprob_ref_alt_sum_list: DataTypeTF
+        logprob_alt_alt_sum_list: DataTypeTF
+        lik_ratio_list: DataTypeTF
+        lik_ratio_norm_list: DataTypeTF
+        logprob_ref_ref_sum_list, logprob_ref_alt_sum_list, logprob_alt_alt_sum_list, lik_ratio_list, lik_ratio_norm_list = compute_test()
                              
         end_calculation()
         
         timestamp: str = datetime.now().isoformat()
         test_name: str = "LR Test_tf"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}}
-        result_value = {"logprob_ref_ref_sum_list": logprob_ref_ref_sum_list.numpy(), # type: ignore
-                        "logprob_ref_alt_sum_list": logprob_ref_alt_sum_list.numpy(), # type: ignore
-                        "logprob_alt_alt_sum_list": logprob_alt_alt_sum_list.numpy(), # type: ignore
-                        "lik_ratio_list": lik_ratio_list.numpy(), # type: ignore
-                        "lik_ratio_norm_list": lik_ratio_norm_list.numpy()} # type: ignore
-        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
+        result_value: Dict[str, Optional[DataTypeNP]] = {"logprob_ref_ref_sum_list": logprob_ref_ref_sum_list.numpy(),
+                                                          "logprob_ref_alt_sum_list": logprob_ref_alt_sum_list.numpy(),
+                                                          "logprob_alt_alt_sum_list": logprob_alt_alt_sum_list.numpy(),
+                                                          "lik_ratio_list": lik_ratio_list.numpy(),
+                                                          "lik_ratio_norm_list": lik_ratio_norm_list.numpy()}
+        result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
         self.Results.append(result)

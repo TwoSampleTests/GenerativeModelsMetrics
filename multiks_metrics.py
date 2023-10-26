@@ -151,23 +151,21 @@ class MultiKSTest(TwoSampleTestBase):
                          progress_bar = progress_bar,
                          verbose = verbose)
         
-    def compute(self, max_vectorize: int = 10) -> None:
+    def compute(self) -> None:
         """
         Function that computes the multivariate Kolmogorov-Smirnov test-statistic and p-value for two samples.
         selecting among the Test_np and Test_tf methods depending on the use_tf attribute.
         
         Parameters:
         ----------
-        max_vectorize: int, optional, default = 10
-            Maximum number of samples that can be processed by the tensorflow backend.
-            If None, the total number of samples is not checked.
+        None
 
         Returns:
         -------
         None
         """
         if self.use_tf:
-            self.Test_tf(max_vectorize = max_vectorize)
+            self.Test_tf()
         else:
             self.Test_np()
     
@@ -207,11 +205,23 @@ class MultiKSTest(TwoSampleTestBase):
             dtype: Union[type, np.dtype] = self.Inputs.dtype.as_numpy_dtype
         else:
             dtype = self.Inputs.dtype
-        seed: int = self.Inputs.seed
         dist_1_k: DataTypeNP
         dist_2_k: DataTypeNP
         
         # Utility functions
+        def set_dist_num_from_symb(dist: DistType,
+                                   nsamples: int,
+                                   dtype: Union[type, np.dtype],
+                                  ) -> DataTypeNP:
+            if isinstance(dist, tfp.distributions.Distribution):
+                dist_num_tmp: DataTypeTF = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+                dist_num: DataTypeNP = dist_num_tmp.numpy().astype(dtype) # type: ignore
+            elif isinstance(dist, NumpyDistribution):
+                dist_num = dist.sample(nsamples).astype(dtype = dtype)
+            else:
+                raise TypeError("dist must be either a tfp.distributions.Distribution or a NumpyDistribution object.")
+            return dist_num
+        
         def start_calculation() -> None:
             conditional_print(self.verbose, "\n------------------------------------------")
             conditional_print(self.verbose, "Starting MultiKS tests calculation...")
@@ -241,7 +251,7 @@ class MultiKSTest(TwoSampleTestBase):
         start_calculation()
         init_progress_bar()
             
-        reset_random_seeds(seed = seed)
+        self.Inputs.reset_seed_generator()
         
         conditional_print(self.verbose, "Running numpy MultiKS tests...")
         for k in range(niter):
@@ -250,13 +260,13 @@ class MultiKSTest(TwoSampleTestBase):
                 dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             elif not np.shape(dist_1_num[0])[0] == 0 and np.shape(dist_2_num[0])[0] == 0:
                 dist_1_k = dist_1_num[k*batch_size:(k+1)*batch_size,:]
-                dist_2_k = np.array(dist_2_symb.sample(batch_size)).astype(dtype) # type: ignore
+                dist_2_k = set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype)
             elif np.shape(dist_1_num[0])[0] == 0 and not np.shape(dist_2_num[0])[0] == 0:
-                dist_1_k = np.array(dist_1_symb.sample(batch_size)).astype(dtype) # type: ignore
+                dist_1_k = set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype)
                 dist_2_k = dist_2_num[k*batch_size:(k+1)*batch_size,:]
             else:
-                dist_1_k = np.array(dist_1_symb.sample(batch_size)).astype(dtype) # type: ignore
-                dist_2_k = np.array(dist_2_symb.sample(batch_size)).astype(dtype) # type: ignore
+                dist_1_k = set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype)
+                dist_2_k = set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype)
             multiks = multiks_2samp_np(dist_1_k, dist_2_k)
             multiks_list.append(multiks)
             update_progress_bar()
@@ -267,8 +277,8 @@ class MultiKSTest(TwoSampleTestBase):
         timestamp: str = datetime.now().isoformat()
         test_name: str = "MultiKS Test_np"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "numpy"}}
-        result_value: Dict[str, DataTypeNP] = {"metric_list": np.array(multiks_list)}
-        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
+        result_value: Dict[str, Optional[DataTypeNP]] = {"metric_list": np.array(multiks_list)}
+        result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
         self.Results.append(result)
         
     def Test_tf(self) -> None:
@@ -301,17 +311,16 @@ class MultiKSTest(TwoSampleTestBase):
         if isinstance(self.Inputs.dist_1_symb, tfp.distributions.Distribution):
             dist_1_symb: tfp.distributions.Distribution = self.Inputs.dist_1_symb
         else:
-            raise ValueError("dist_1_symb must be a tfp.distributions.Distribution object when use_tf is True.")
+            raise TypeError("dist_1_symb must be a tfp.distributions.Distribution object when use_tf is True.")
         if isinstance(self.Inputs.dist_2_symb, tfp.distributions.Distribution):
             dist_2_symb: tfp.distributions.Distribution = self.Inputs.dist_2_symb
         else:
-            raise ValueError("dist_2_symb must be a tfp.distributions.Distribution object when use_tf is True.")
+            raise TypeError("dist_2_symb must be a tfp.distributions.Distribution object when use_tf is True.")
         ndims: int = self.Inputs.ndims
         niter: int
         batch_size: int
         niter, batch_size = [int(i) for i in self.get_niter_batch_size_tf()] # type: ignore
         dtype: tf.DType = tf.as_dtype(self.Inputs.dtype)
-        seed: int = self.Inputs.seed
         
         # Utility functions
         def start_calculation() -> None:
@@ -329,11 +338,8 @@ class MultiKSTest(TwoSampleTestBase):
             
         def set_dist_num_from_symb(dist: DistTypeTF,
                                    nsamples: int,
-                                   seed: int = 0
                                   ) -> tf.Tensor:
-            nonlocal dtype
-            #dist_num: tf.Tensor = tf.cast(dist.sample(nsamples, seed = int(seed)), dtype = dtype) # type: ignore
-            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, 100, dtype = self.Inputs.dtype, seed = int(seed), mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
             return dist_num
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
@@ -341,26 +347,21 @@ class MultiKSTest(TwoSampleTestBase):
         
         #@tf.function(jit_compile=True, reduce_retracing = True)
         #@tf.function(reduce_retracing=True)
-        def compute_test() -> Tuple[tf.Tensor, tf.Tensor]:
+        def compute_test() -> DataTypeTF:
             # Check if numerical distributions are empty and print a warning if so
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
             
             res = tf.TensorArray(dtype, size = niter)
-            
-            # Define unique constants for the two distributions. It is sufficient that these two are different to get different samples from the two distributions, if they are equal. 
-            # There is not problem with subsequent calls to the batched_test function, since the random state is updated at each call.
-            seed_dist_1  = int(1e6)  # Seed for distribution 1
-            seed_dist_2  = int(1e12)  # Seed for distribution 2
 
             def body(i, res):
                 
                 # Define the loop body to vectorize over ndims*chunk_size
                 dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size, seed = seed_dist_1),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size),
                                                false_fn = lambda: return_dist_num(dist_1_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
                 dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size, seed = seed_dist_2),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size),
                                                false_fn = lambda: return_dist_num(dist_2_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
 
                 multiks = multiks_2samp_tf(dist_1_k, dist_2_k, scaled = False) # type: ignore
@@ -372,19 +373,21 @@ class MultiKSTest(TwoSampleTestBase):
 
             _, res = tf.while_loop(lambda i, res: i < niter, body, [0, res])
             
-            return res.stack()
+            res_stacked: DataTypeTF = res.stack()
+            
+            return res_stacked
                 
         start_calculation()
         
-        reset_random_seeds(seed = seed)
+        self.Inputs.reset_seed_generator()
         
-        multiks_list = compute_test() # type: ignore
+        multiks_list = compute_test()
                              
         end_calculation()
         
         timestamp: str = datetime.now().isoformat()
         test_name: str = "MultiKS Test_tf"
         parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}}
-        result_value: Dict[str, DataTypeNP] = {"metric_list": np.array(multiks_list)}
-        result = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
+        result_value: Dict[str, Optional[DataTypeNP]] = {"metric_list": np.array(multiks_list)}
+        result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value)
         self.Results.append(result)
