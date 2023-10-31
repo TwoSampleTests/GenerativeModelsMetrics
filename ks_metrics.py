@@ -142,7 +142,7 @@ def _ks_2samp_tf_internal(data1: tf.Tensor,
             x, y = y, tf.math.floormod(x, y)
         return x
 
-    MAX_AUTO_N: tf.Tensor = tf.constant(10000, dtype=tf.float32) # type: ignore
+    MAX_AUTO_N: tf.Tensor = tf.constant(10_000, dtype=tf.float32) # type: ignore
     
     data1 = tf.sort(data1)
     data2 = tf.sort(data2)
@@ -351,7 +351,7 @@ class KSTest(TwoSampleTestBase):
         tf.random.set_seed(seed)
 
         # Define inputs
-        nsamples = 1000000
+        nsamples = 1_000_000
         ndims = 2
         dtype = tf.float32
         ndims = 100
@@ -363,7 +363,7 @@ class KSTest(TwoSampleTestBase):
         data_input = GMetrics.TwoSampleTestInputs(dist_1_input = dist_1_num,
                                                   dist_2_input = dist_2_num,
                                                   niter = 100,
-                                                  batch_size = 10000,
+                                                  batch_size = 10_000,
                                                   dtype_input = tf.float64,
                                                   seed_input = 0,
                                                   use_tf = True,

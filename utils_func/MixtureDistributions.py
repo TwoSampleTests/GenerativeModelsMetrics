@@ -14,7 +14,7 @@ def MixtureGaussian(ncomp: int,
                     seed: int = 0) -> tfp.distributions.Mixture:
     """
     Correlated mixture of Gaussians used in https://arxiv.org/abs/2302.12024 
-    with ncomp = 3 and ndims varying from 4 to 1000
+    with ncomp = 3 and ndims varying from 4 to 1_000
     
     Args:
         ncomp: int, number of components

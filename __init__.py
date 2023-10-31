@@ -1,5 +1,6 @@
 from .fn_metrics import FNMetric
 from .fpd_metrics import FPDMetric
+from .kpd_metrics import KPDMetric
 from .ks_metrics import KSTest
 from .lr_metrics import LRMetric
 from .multiks_metrics import MultiKSTest

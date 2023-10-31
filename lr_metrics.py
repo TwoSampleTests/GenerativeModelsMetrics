@@ -157,7 +157,7 @@ class LRMetric(TwoSampleTestBase):
         tf.random.set_seed(seed)
 
         # Define inputs
-        nsamples = 1000000
+        nsamples = 1_000_000
         ndims = 2
         dtype = tf.float32
         ndims = 100
@@ -169,7 +169,7 @@ class LRMetric(TwoSampleTestBase):
         data_input = GMetrics.TwoSampleTestInputs(dist_1_input = dist_1_symb,
                                                   dist_2_input = dist_2_symb,
                                                   niter = 100,
-                                                  batch_size = 10000,
+                                                  batch_size = 10_000,
                                                   dtype_input = tf.float64,
                                                   seed_input = 0,
                                                   use_tf = True,

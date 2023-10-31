@@ -96,7 +96,7 @@ def compute_lik_ratio_statistic(dist_ref: tfp.distributions.Distribution,
                                 dist_alt: tfp.distributions.Distribution,
                                 sample_ref: tf.Tensor,
                                 sample_alt: tf.Tensor,
-                                batch_size: int = 10000
+                                batch_size: int = 10_000
                                ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
     start_global = timer()
     
