@@ -11,6 +11,8 @@ from typing import List, Tuple, Dict, Callable, Union, Optional
 
 def MixtureGaussian(ncomp: int,
                     ndims: int,
+                    eps_loc: float = 0.,
+                    eps_scale: float = 0.,
                     seed: int = 0) -> tfp.distributions.Mixture:
     """
     Correlated mixture of Gaussians used in https://arxiv.org/abs/2302.12024 
@@ -24,11 +26,13 @@ def MixtureGaussian(ncomp: int,
     Returns:
         targ_dist: tfp.distributions.Mixture, mixture of Gaussians
     """
-    targ_dist: tfp.distributions.Mixture = MixMultiNormal1(ncomp, ndims, seed = seed)
+    targ_dist: tfp.distributions.Mixture = MixMultiNormal1(ncomp, ndims, eps_loc, eps_scale, seed = seed)
     return targ_dist
 
 def MixNormal1(n_components: int = 3,
                n_dimensions: int = 4,
+               eps_loc: float = 0.,
+               eps_scale: float = 0.,
                seed: int = 0) -> tfp.distributions.Mixture:
     """
     Defines a mixture of 'n_components' Normal distributions in 'n_dimensions' dimensions 
@@ -53,13 +57,15 @@ def MixNormal1(n_components: int = 3,
         mix_gauss: tfp.distributions.Mixture, mixture of Gaussians
     """
     reset_random_seeds(seed)
-    loc: np.ndarray = np.random.sample([n_components, n_dimensions]) * 10
+    loc: np.ndarray = np.random.sample([n_components, n_dimensions])*10
+    loc_eps: np.ndarray = np.random.uniform(loc-eps_loc, loc+eps_loc)
     scale: np.ndarray = np.random.sample([n_components,n_dimensions])
+    scale_eps: np.ndarray = np.random.uniform(scale-eps_scale, scale+eps_scale)
     probs: np.ndarray = np.random.sample([n_dimensions,n_components])
     components: List[tfp.distributions.Normal] = []
     for i in range(n_components):
-        components.append(tfp.distributions.Normal(loc = loc[i],
-                                     scale = scale[i]))
+        components.append(tfp.distributions.Normal(loc = loc_eps[i],
+                                                   scale = scale_eps[i]))
     mix_gauss: tfp.distributions.Mixture = tfp.distributions.Mixture(
         cat = tfp.distributions.Categorical(probs=probs),
         components = components,
@@ -68,6 +74,8 @@ def MixNormal1(n_components: int = 3,
     
 def MixNormal2(n_components: int = 3,
                n_dimensions: int = 4,
+               eps_loc: float = 0.,
+               eps_scale: float = 0.,
                seed: int = 0) -> tfp.distributions.Mixture:
     """
     Defines a mixture of 'n_components' Normal distributions in 'n_dimensions' dimensions 
@@ -92,18 +100,22 @@ def MixNormal2(n_components: int = 3,
         mix_gauss: tfp.distributions.MixtureSameFamily, mixture of Gaussians
     """
     reset_random_seeds(seed)
-    loc: np.ndarray = np.random.sample([n_components, n_dimensions]) * 10
+    loc: np.ndarray = np.random.sample([n_components, n_dimensions])*10
+    loc_eps: np.ndarray = np.random.uniform(loc-eps_loc, loc+eps_loc)
     scale: np.ndarray = np.random.sample([n_components,n_dimensions])
+    scale_eps: np.ndarray = np.random.uniform(scale-eps_scale, scale+eps_scale)
     probs: np.ndarray = np.random.sample(n_components)
     mix_gauss: tfp.distributions.MixtureSameFamily = tfp.distributions.MixtureSameFamily(
         mixture_distribution = tfp.distributions.Categorical(probs = probs),
-        components_distribution = tfp.distributions.Normal(loc = loc,
-                                             scale = scale),
+        components_distribution = tfp.distributions.Normal(loc = loc_eps,
+                                                           scale = scale_eps),
         validate_args = True)
     return mix_gauss
 
 def MixNormal1_indep(n_components: int = 3,
                      n_dimensions: int = 4,
+                     eps_loc: float = 0.,
+                     eps_scale: float = 0.,
                      seed: int = 0) -> tfp.distributions.Independent:
     """
     Defines a mixture of 'n_components' Normal distributions in 'n_dimensions' dimensions 
@@ -128,13 +140,15 @@ def MixNormal1_indep(n_components: int = 3,
         mix_gauss: tfp.distributions.Independent, mixture of Gaussians
     """
     reset_random_seeds(seed)
-    loc: np.ndarray = np.random.sample([n_components, n_dimensions]) * 10
+    loc: np.ndarray = np.random.sample([n_components, n_dimensions])*10
+    loc_eps: np.ndarray = np.random.uniform(loc-eps_loc, loc+eps_loc)
     scale: np.ndarray = np.random.sample([n_components,n_dimensions])
+    scale_eps: np.ndarray = np.random.uniform(scale-eps_scale, scale+eps_scale)
     probs: np.ndarray = np.random.sample([n_dimensions,n_components])
     components: List[tfp.distributions.Normal] = []
     for i in range(n_components):
-        components.append(tfp.distributions.Normal(loc = loc[i], 
-                                     scale = scale[i]))
+        components.append(tfp.distributions.Normal(loc = loc_eps[i],
+                                                   scale = scale_eps[i]))
     mix_gauss: tfp.distributions.Independent = tfp.distributions.Independent(
         distribution = tfp.distributions.Mixture(cat = tfp.distributions.Categorical(probs = probs),
                                    components = components,
@@ -143,7 +157,9 @@ def MixNormal1_indep(n_components: int = 3,
     return mix_gauss
     
 def MixNormal2_indep(n_components: int = 3,
-                     n_dimensions: int = 4,  
+                     n_dimensions: int = 4,
+                     eps_loc: float = 0.,
+                     eps_scale: float = 0.,
                      seed: int = 0) -> tfp.distributions.Independent:
     """
     Defines a mixture of 'n_components' Normal distributions in 'n_dimensions' dimensions 
@@ -168,19 +184,24 @@ def MixNormal2_indep(n_components: int = 3,
         mix_gauss: tfp.distributions.Independent, mixture of Gaussians
     """
     reset_random_seeds(seed)
-    loc: np.ndarray = np.random.sample([n_components, n_dimensions]) * 10
+    loc: np.ndarray = np.random.sample([n_components, n_dimensions])*10
+    loc_eps: np.ndarray = np.random.uniform(loc-eps_loc, loc+eps_loc)
     scale: np.ndarray = np.random.sample([n_components,n_dimensions])
+    scale_eps: np.ndarray = np.random.uniform(scale-eps_scale, scale+eps_scale)
     probs: np.ndarray = np.random.sample(n_components)
     mix_gauss: tfp.distributions.Independent = tfp.distributions.Independent(
-        distribution = tfp.distributions.MixtureSameFamily(mixture_distribution = tfp.distributions.Categorical(probs = probs),
-                                             components_distribution = tfp.distributions.Normal(loc = loc,
-                                                                                  scale = scale),
-                                             validate_args = True),
+        distribution = tfp.distributions.MixtureSameFamily(
+            mixture_distribution = tfp.distributions.Categorical(probs = probs),
+            components_distribution = tfp.distributions.Normal(loc = loc_eps,
+                                                               scale = scale_eps),
+            validate_args = True),
         reinterpreted_batch_ndims = 0)
     return mix_gauss
 
 def MixMultiNormal1(n_components: int = 3,
                     n_dimensions: int = 4,
+                    eps_loc: float = 0.,
+                    eps_scale: float = 0.,
                     seed: int = 0) -> tfp.distributions.Mixture:
     """
     Defines a mixture of 'n_components' Multivariate Normal distributions in 'n_dimensions' dimensions 
@@ -205,13 +226,15 @@ def MixMultiNormal1(n_components: int = 3,
         mix_gauss: tfp.distributions.Mixture, mixture of Gaussians
     """
     reset_random_seeds(seed)
-    loc: np.ndarray = np.random.sample([n_components, n_dimensions]) * 10
+    loc: np.ndarray = np.random.sample([n_components, n_dimensions])*10
+    loc_eps: np.ndarray = np.random.uniform(loc-eps_loc, loc+eps_loc)
     scale: np.ndarray = np.random.sample([n_components,n_dimensions])
+    scale_eps: np.ndarray = np.random.uniform(scale-eps_scale, scale+eps_scale)
     probs: np.ndarray = np.random.sample(n_components)
     components: List[tfp.distributions.MultivariateNormalDiag] = []
     for i in range(n_components):
-        components.append(tfp.distributions.MultivariateNormalDiag(loc = loc[i],
-                                                     scale_diag = scale[i]))
+        components.append(tfp.distributions.MultivariateNormalDiag(loc = loc_eps[i],
+                                                                   scale_diag = scale_eps[i]))
     mix_gauss: tfp.distributions.Mixture = tfp.distributions.Mixture(
         cat = tfp.distributions.Categorical(probs = probs),
         components = components,
@@ -220,6 +243,8 @@ def MixMultiNormal1(n_components: int = 3,
     
 def MixMultiNormal2(n_components: int = 3,
                     n_dimensions: int = 4,
+                    eps_loc: float = 0.,
+                    eps_scale: float = 0.,
                     seed: int = 0) -> tfp.distributions.MixtureSameFamily:
     """
     Defines a mixture of 'n_components' Multivariate Normal distributions in 'n_dimensions' dimensions 
@@ -244,18 +269,22 @@ def MixMultiNormal2(n_components: int = 3,
         mix_gauss: tfp.distributions.MixtureSameFamily, mixture of Gaussians
     """
     reset_random_seeds(seed)
-    loc: np.ndarray = np.random.sample([n_components, n_dimensions]) * 10
+    loc: np.ndarray = np.random.sample([n_components, n_dimensions])*10
+    loc_eps: np.ndarray = np.random.uniform(loc-eps_loc, loc+eps_loc)
     scale: np.ndarray = np.random.sample([n_components,n_dimensions])
+    scale_eps: np.ndarray = np.random.uniform(scale-eps_scale, scale+eps_scale)
     probs = np.random.sample(n_components)
     mix_gauss: tfp.distributions.MixtureSameFamily = tfp.distributions.MixtureSameFamily(
         mixture_distribution = tfp.distributions.Categorical(probs = probs),
-        components_distribution = tfp.distributions.MultivariateNormalDiag(loc = loc,
-                                                             scale_diag = scale),
+        components_distribution = tfp.distributions.MultivariateNormalDiag(loc = loc_eps,
+                                                                           scale_diag = scale_eps),
         validate_args=True)
     return mix_gauss
 
 def MixMultiNormal1_indep(n_components: int = 3,
                           n_dimensions: int = 4,
+                          eps_loc: float = 0.,
+                          eps_scale: float = 0.,
                           seed: int = 0) -> tfp.distributions.Independent:
     """
     Defines a mixture of 'n_components' Multivariate Normal distributions in 'n_dimensions' dimensions 
@@ -280,22 +309,26 @@ def MixMultiNormal1_indep(n_components: int = 3,
         mix_gauss: tfp.distributions.Independent, mixture of Gaussians
     """
     reset_random_seeds(seed)
-    loc: np.ndarray = np.random.sample([n_components, n_dimensions]) * 10
+    loc: np.ndarray = np.random.sample([n_components, n_dimensions])*10
+    loc_eps: np.ndarray = np.random.uniform(loc-eps_loc, loc+eps_loc)
     scale: np.ndarray = np.random.sample([n_components,n_dimensions])
+    scale_eps: np.ndarray = np.random.uniform(scale-eps_scale, scale+eps_scale)
     probs: np.ndarray = np.random.sample(n_components)
-    components: List[tfp.distributions.MultivariateNormalDiag]
+    components: List[tfp.distributions.MultivariateNormalDiag] = []
     for i in range(n_components):
-        components.append(tfp.distributions.MultivariateNormalDiag(loc = loc[i],
-                                                     scale_diag = scale[i]))
+        components.append(tfp.distributions.MultivariateNormalDiag(loc = loc_eps[i],
+                                                                   scale_diag = scale_eps[i]))
     mix_gauss: tfp.distributions.Independent = tfp.distributions.Independent(
         distribution = tfp.distributions.Mixture(cat = tfp.distributions.Categorical(probs = probs),
-                                   components = components,
-                                   validate_args = True),
+                                                 components = components,
+                                                 validate_args = True),
         reinterpreted_batch_ndims = 0)
     return mix_gauss
     
 def MixMultiNormal2_indep(n_components: int = 3,
                           n_dimensions: int = 4,
+                          eps_loc: float = 0.,
+                          eps_scale: float = 0.,
                           seed: int = 0) -> tfp.distributions.Independent:
     """
     Defines a mixture of 'n_components' Multivariate Normal distributions in 'n_dimensions' dimensions 
@@ -320,15 +353,18 @@ def MixMultiNormal2_indep(n_components: int = 3,
         mix_gauss: tfp.distributions.Independent, mixture of Gaussians
     """
     reset_random_seeds(seed)
-    loc: np.ndarray = np.random.sample([n_components, n_dimensions]) * 10
+    loc: np.ndarray = np.random.sample([n_components, n_dimensions])*10
+    loc_eps: np.ndarray = np.random.uniform(loc-eps_loc, loc+eps_loc)
     scale: np.ndarray = np.random.sample([n_components,n_dimensions])
+    scale_eps: np.ndarray = np.random.uniform(scale-eps_scale, scale+eps_scale)
     probs: np.ndarray = np.random.sample(n_components)
 
     mix_gauss: tfp.distributions.Independent = tfp.distributions.Independent(
-        distribution = tfp.distributions.MixtureSameFamily(mixture_distribution = tfp.distributions.Categorical(probs = probs),
-                                             components_distribution = tfp.distributions.MultivariateNormalDiag(loc = loc,
-                                                                                                  scale_diag = scale),
-                                             validate_args = True),
+        distribution = tfp.distributions.MixtureSameFamily(
+            mixture_distribution = tfp.distributions.Categorical(probs = probs),
+            components_distribution = tfp.distributions.MultivariateNormalDiag(loc = loc_eps,
+                                                                               scale_diag = scale_eps),
+            validate_args = True),
         reinterpreted_batch_ndims = 0)
     return mix_gauss
 
