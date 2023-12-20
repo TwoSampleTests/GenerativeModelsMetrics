@@ -527,3 +527,28 @@ def generate_and_clean_data(dist: tfp.distributions.Distribution,
                                               batch_size = batch_size, 
                                               dtype = dtype, 
                                               seed_generator = seed_generator)
+        
+def flatten_list(lst):
+    out = []
+    for item in lst:
+        if isinstance(item, (list, tuple, np.ndarray)):
+            out.extend(flatten_list(item))
+        else:
+            out.append(item)
+    return out
+
+def convert_types_dict(d):
+    dd = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            dd[k] = convert_types_dict(v)
+        elif type(v) == np.ndarray:
+            dd[k] = v.tolist()
+        elif type(v) == list:
+            if str in [type(q) for q in flatten_list(v)]:
+                dd[k] = np.array(v, dtype=object).tolist()
+            else:
+                dd[k] = np.array(v).tolist()
+        else:
+            dd[k] = np.array(v).tolist()
+    return dd

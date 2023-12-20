@@ -6,6 +6,7 @@ __all__ = [
 
 from abc import ABC, abstractmethod
 import numpy as np
+import json
 import pandas as pd # type: ignore
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -320,6 +321,13 @@ class TwoSampleTestInputs(object):
         return self._dtype
     
     @property
+    def dtype_str(self) -> str:
+        if isinstance(self.dtype, (tf.DType,np.dtype)):
+            return self.dtype.name
+        else:
+            raise TypeError("dtype is not of type tf.DType or np.dtype")
+    
+    @property
     def small_sample(self) -> bool:
         return self._small_sample
     
@@ -624,7 +632,7 @@ class TwoSampleTestInputs(object):
                 "niter": self.niter,
                 "batch_size_test": self.batch_size_test,
                 "batch_size_gen": self.batch_size_gen,
-                "dtype": self.dtype,
+                "dtype": self.dtype_str,
                 "small_sample_threshold": self.small_sample_threshold,
                 "small_sample": self.small_sample}
     
@@ -639,7 +647,9 @@ class TwoSampleTestResult:
         self.timestamp: str = timestamp
         self.test_name: str = test_name
         self.result_value: Dict[str, Optional[DataTypeNP]] = result_value
-        self.__dict__.update(parameters)
+        for key, val in self.result_value.items():
+            if isinstance(val, list):
+                val = np.array(val)
     
     def result_to_dataframe(self):
         return pd.DataFrame.from_dict(self.__dict__, orient="index")
@@ -718,6 +728,29 @@ class TwoSampleTestResults(object):
     @property
     def results_params_dict(self) -> Dict[str, Any]:
         return {str(k): v for k, v in self.results_params_df.to_dict(orient="index").items()}
+    
+    def save_to_json(self, filepath: str) -> None:
+        results_data = [utils.convert_types_dict(result.__dict__) for result in self._results]
+        with open(filepath, 'w') as file:
+            json.dump(results_data, file, indent=4)
+
+    def load_from_json(self, filepath: str):
+        with open(filepath, 'r') as file:
+            data = json.load(file)
+        self._results = []
+        for result_data in data:
+            timestamp = result_data.pop("timestamp")
+            test_name = result_data.pop("test_name")
+            result_value_list = result_data.pop("result_value")
+            print(result_value_list)
+            result_value: Dict[str, Optional[DataTypeNP]] = {key: np.array(val) for key, val in result_value_list.items()}
+            print(result_value)
+            parameters = result_data
+            result = TwoSampleTestResult(timestamp = timestamp,
+                                         test_name = test_name,
+                                         parameters = parameters,
+                                         result_value = result_value)
+            self._results.append(result)
 
 
 class TwoSampleTestBase(ABC):
