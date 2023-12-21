@@ -646,6 +646,7 @@ class TwoSampleTestResult:
                 ) -> None:
         self.timestamp: str = timestamp
         self.test_name: str = test_name
+        self.__dict__.update(parameters)
         self.result_value: Dict[str, Optional[DataTypeNP]] = result_value
         for key, val in self.result_value.items():
             if isinstance(val, list):
