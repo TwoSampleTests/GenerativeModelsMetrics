@@ -743,9 +743,7 @@ class TwoSampleTestResults(object):
             timestamp = result_data.pop("timestamp")
             test_name = result_data.pop("test_name")
             result_value_list = result_data.pop("result_value")
-            print(result_value_list)
             result_value: Dict[str, Optional[DataTypeNP]] = {key: np.array(val) for key, val in result_value_list.items()}
-            print(result_value)
             parameters = result_data
             result = TwoSampleTestResult(timestamp = timestamp,
                                          test_name = test_name,

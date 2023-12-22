@@ -33,22 +33,27 @@ from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, In
 def _linear(x, intercept, slope):
     return intercept + slope * x
 
-@tf.function(jit_compile=True, reduce_retracing=True)
+#@tf.function(jit_compile=True, reduce_retracing=True)
+#def _matrix_sqrtm(matrix: tf.Tensor) -> tf.Tensor:
+#    # Eigenvalue decomposition
+#    e: tf.Tensor
+#    v: tf.Tensor
+#    e, v = tf.linalg.eigh(matrix)
+#    # Create the square root of the diagonal matrix with the eigenvalues
+#    sqrt_e: tf.Tensor
+#    sqrt_e = tf.sqrt(e)
+#    sqrt_e = tf.linalg.diag(sqrt_e)
+#    # Reconstruct the square root of the original matrix
+#    sqrt_mat: tf.Tensor
+#    sqrt_mat = tf.linalg.matmul(tf.linalg.matmul(v, sqrt_e), tf.linalg.adjoint(v))
+#    return sqrt_mat
+
 def _matrix_sqrtm(matrix: tf.Tensor) -> tf.Tensor:
-    # Eigenvalue decomposition
-    e: tf.Tensor
-    v: tf.Tensor
-    e, v = tf.linalg.eigh(matrix)
-    # Create the square root of the diagonal matrix with the eigenvalues
-    sqrt_e: tf.Tensor
-    sqrt_e = tf.sqrt(e)
-    sqrt_e = tf.linalg.diag(sqrt_e)
-    # Reconstruct the square root of the original matrix
-    sqrt_mat: tf.Tensor
-    sqrt_mat = tf.linalg.matmul(tf.linalg.matmul(v, sqrt_e), tf.linalg.adjoint(v))
+    #with tf.device('/CPU:0'):
+    sqrt_mat = tf.linalg.sqrtm(matrix)
     return sqrt_mat
 
-@tf.function(jit_compile=True, reduce_retracing=True)
+@tf.function(jit_compile=False, reduce_retracing=True)
 def _calculate_frechet_distance_tf(mu1_input: DataType,
                                    sigma1_input: DataType,
                                    mu2_input: DataType,
@@ -102,7 +107,7 @@ def _normalise_features_tf(data1_input: DataType,
     else:
         return data1 / maxes
     
-@tf.function(jit_compile = True, reduce_retracing = True)
+@tf.function(jit_compile = False, reduce_retracing = True)
 def fpd_tf(data1_input: DataType, 
            data2_input: DataType,
            min_samples: int = 20_000, 
@@ -164,19 +169,28 @@ def fpd_tf(data1_input: DataType,
     
     return vals_stacked, batches
 
-def fpd_tf_fit(vals_list_input: DataType,
+def fpd_tf_fit(vals_list_input: DataType, 
                batches_list_input: tf.Tensor
               ) -> Tuple[DataTypeNP, DataTypeNP]:
     vals_list: DataTypeNP = np.array(vals_list_input)
     batches_list: DataTypeNP = np.array(batches_list_input)
     metric_list: list = []
     metric_error_list: list = []
+
     for vals, batches in zip(vals_list, batches_list):
-        params: DataTypeNP
-        covs: DataTypeNP
-        params, covs = curve_fit(_linear, 1 / batches, vals, bounds=([0, 0], [np.inf, np.inf]))
-        metric_list.append(params[0])
-        metric_error_list.append(np.sqrt(np.diag(covs)[0]))
+        try:
+            # Using curve_fit with a try-except block
+            params, covs = curve_fit(_linear, 1 / batches, vals, bounds=([0, 0], [np.inf, np.inf]))
+            metric = params[0]
+            metric_error = np.sqrt(np.diag(covs)[0])
+        except Exception as e:
+            # Handle the exception by propagating NaN or some other indicator
+            metric = np.nan
+            metric_error = np.nan
+
+        metric_list.append(metric)
+        metric_error_list.append(metric_error)
+
     return np.array(metric_list), np.array(metric_error_list)
 
 class FPDMetric(TwoSampleTestBase):
@@ -260,7 +274,7 @@ class FPDMetric(TwoSampleTestBase):
         else:
             self.Test_np()
     
-    def Test_np(self, **fpd_kwargs) -> None:
+    def Test_np(self) -> None:
         """
         """
         # Set alias for inputs
@@ -347,7 +361,7 @@ class FPDMetric(TwoSampleTestBase):
                 dist_2_k = set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype)
             metric: float
             metric_error: float
-            metric, metric_error = JMetrics.fpd(dist_1_k, dist_2_k, **fpd_kwargs)
+            metric, metric_error = JMetrics.fpd(dist_1_k, dist_2_k, **self.fpd_kwargs)
             metric_list.append(metric)
             metric_error_list.append(metric_error)
             update_progress_bar()
@@ -506,8 +520,18 @@ class FPDMetric(TwoSampleTestBase):
                 res_vals = res_vals.write(i, res_i[:, :npoints]) # type: ignore
                 res_batches = res_batches.write(i, res_i[:, npoints:]) # type: ignore
                 
-            vals_list: DataTypeTF = tf.squeeze(res_vals.stack())
-            batches_list: tf.Tensor = tf.squeeze(res_batches.stack())
+            vals_list: DataTypeTF = res_vals.stack() # type: ignore
+            batches_list: tf.Tensor = res_batches.stack() # type: ignore
+            
+            shape = tf.shape(vals_list)
+            vals_list = tf.reshape(vals_list, (shape[0] * shape[1], shape[2]))
+            batches_list = tf.reshape(batches_list, (shape[0] * shape[1], shape[2]))
+            #vals_list: DataTypeTF = tf.squeeze(res_vals.stack())
+            #batches_list: tf.Tensor = tf.squeeze(res_batches.stack())
+            
+            # Flatten vals_list and batches_list to 1-D arrays
+            #vals_list = tf.reshape(vals_list, [-1])  # Flatten to 1-D
+            #batches_list = tf.reshape(batches_list, [-1])  # Flatten to 1-D
 
             return vals_list, batches_list
 
@@ -519,8 +543,8 @@ class FPDMetric(TwoSampleTestBase):
         batches_list: tf.Tensor
         vals_list, batches_list  = compute_test(max_vectorize = max_vectorize)
                 
-        #print(f"vals_list: {vals_list=}")
-        #print(f"batches_list: {batches_list=}")
+        print(f"vals_list: {vals_list=}")
+        print(f"batches_list: {batches_list=}")
         
         metric_list: DataTypeNP
         metric_error_list: DataTypeNP

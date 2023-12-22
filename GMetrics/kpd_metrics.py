@@ -64,13 +64,18 @@ def _mmd_poly_quadratic_unbiased_tf(X, Y, degree=4):
     return _mmd_quadratic_unbiased_tf(XX, YY, XY)
 
 @tf.function(jit_compile=True, reduce_retracing = True)
-    
 def kpd_tf(X: tf.Tensor,
            Y: tf.Tensor,
            num_batches: int = 10,
            batch_size: int = 5000,
            normalise: bool = True,
            seed: int = 42):
+    if normalise:
+        X, Y = _normalise_features_tf(X, Y) # type: ignore
+    else:
+        X = tf.convert_to_tensor(Y)
+        X = tf.convert_to_tensor(Y)
+    
     vals_point = []
     for i in range(num_batches):
         tf.random.set_seed(seed + i * 1000)
@@ -82,6 +87,7 @@ def kpd_tf(X: tf.Tensor,
 
         val = _mmd_poly_quadratic_unbiased_tf(rand_sample1, rand_sample2)
         vals_point.append(val)
+    
     vals_point = tf.stack(vals_point)
     return vals_point
 
@@ -89,9 +95,13 @@ def kpd_tf_output(vals_points_input: DataTypeTF) -> DataTypeTF:
     vals_points: DistTypeNP = np.array(vals_points_input)
     metric_list: list = []
     metric_error_list: list = []
-    for vals_point in vals_points:
-        metric_list.append(np.median(vals_point))
-        metric_error_list.append(iqr(vals_point, rng=(16.275, 83.725)) / 2)
+    if len(vals_points.shape) == 1:
+        metric_list.append(np.median(vals_points))
+        metric_error_list.append(iqr(vals_points, rng=(16.275, 83.725)) / 2)
+    else:
+        for vals_point in vals_points:
+            metric_list.append(np.median(vals_point))
+            metric_error_list.append(iqr(vals_point, rng=(16.275, 83.725)) / 2)
     return np.array(metric_list), np.array(metric_error_list)
         
     # Calculating median and IQR using TensorFlow
@@ -408,7 +418,7 @@ class KPDMetric(TwoSampleTestBase):
             
             _, res = tf.while_loop(cond, body, [0, res])
             
-            res_stacked: DataTypeTF = tf.reshape(res.stack(), (niter,))
+            res_stacked: DataTypeTF = tf.reshape(res.stack(), (niter,-1))
 
             return res_stacked
 
@@ -417,11 +427,9 @@ class KPDMetric(TwoSampleTestBase):
         self.Inputs.reset_seed_generator()
         
         vals_list: DataTypeTF
-        batches_list: tf.Tensor
         vals_list = compute_test(max_vectorize = max_vectorize)
                 
         #print(f"vals_list: {vals_list=}")
-        #print(f"batches_list: {batches_list=}")
         
         metric_list: DataTypeNP
         metric_error_list: DataTypeNP
