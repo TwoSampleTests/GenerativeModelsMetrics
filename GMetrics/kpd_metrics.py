@@ -98,10 +98,12 @@ def kpd_tf_output(vals_points_input: DataTypeTF) -> DataTypeTF:
     if len(vals_points.shape) == 1:
         metric_list.append(np.median(vals_points))
         metric_error_list.append(iqr(vals_points, rng=(16.275, 83.725)) / 2)
+        #metric_error_list.append(None)
     else:
         for vals_point in vals_points:
             metric_list.append(np.median(vals_point))
             metric_error_list.append(iqr(vals_point, rng=(16.275, 83.725)) / 2)
+            #metric_error_list.append(None)
     return np.array(metric_list), np.array(metric_error_list)
         
     # Calculating median and IQR using TensorFlow

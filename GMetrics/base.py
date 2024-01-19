@@ -511,7 +511,8 @@ class TwoSampleTestInputs(object):
                     if self.is_symb_2 and isinstance(self.dist_2_symb, tfp.distributions.Distribution):
                         pass
                     else:
-                        print("Generating dist_1_num with numpy function.")
+                        if self.verbose:
+                            print("Generating dist_1_num with numpy function.")
                         seed_dist_1 = int(self.seed_generator.make_seeds()[0,0].numpy()) # type: ignore
                         self._dist_1_num = self._dist_1_symb.sample(self.nsamples, seed = int(seed_dist_1)).numpy().astype(self.dtype) # type: ignore
                 else:
@@ -532,7 +533,8 @@ class TwoSampleTestInputs(object):
                     if self.is_symb_1 and isinstance(self.dist_1_symb, tfp.distributions.Distribution):
                         pass
                     else:
-                        print("Generating dist_2_num with numpy function.")
+                        if self.verbose:
+                            print("Generating dist_2_num with numpy function.")
                         seed_dist_2 = int(self.seed_generator.make_seeds()[0,0].numpy()) # type: ignore
                         self._dist_2_num = self._dist_2_symb.sample(self.nsamples, seed = int(seed_dist_2)).numpy().astype(self.dtype) # type: ignore
                 else:
@@ -547,7 +549,8 @@ class TwoSampleTestInputs(object):
         if self.is_symb_1 and self.is_symb_2:
             if isinstance(self.dist_1_symb, tfp.distributions.Distribution) and isinstance(self.dist_2_symb, tfp.distributions.Distribution):
                 if self.small_sample:
-                    print("Generating dist_1_num and dist_2_num with tensorflow function.")
+                    if self.verbose:
+                        print("Generating dist_1_num and dist_2_num with tensorflow function.")
                     self.__check_set_distributions_tf()
                     self._dist_1_num = self.dist_1_num.numpy().astype(self.dtype) # type: ignore
                     self._dist_2_num = self.dist_2_num.numpy().astype(self.dtype) # type: ignore
@@ -556,7 +559,8 @@ class TwoSampleTestInputs(object):
     def __check_set_distributions_tf(self) -> None:
         # Utility functions
         def set_dist_num_from_symb(dist: tfp.distributions.Distribution) -> tf.Tensor:
-            print("Setting dist_num from dist_symb.")
+            if self.verbose:
+                print("Setting dist_num from dist_symb.")
             if isinstance(dist, tfp.distributions.Distribution):
                 dist_num: tf.Tensor = generate_and_clean_data(dist, self.nsamples, self.batch_size_gen, dtype = self.dtype, seed_generator = self.seed_generator, mirror_strategy = self.mirror_strategy) # type: ignore
             else:
@@ -564,17 +568,20 @@ class TwoSampleTestInputs(object):
             return dist_num
         
         def return_dist_num(dist_num: DataType) -> tf.Tensor:
-            print("Returning dist_num.")
+            if self.verbose:
+                print("Returning dist_num.")
             if isinstance(dist_num, tf.Tensor):
                 return dist_num
             else:
                 raise ValueError("dist_num should be an instance of tf.Tensor.")
             
         def reset_dist_num(dist: tfp.distributions.Distribution) -> tf.Tensor:
-            print("Resetting dist_num.")
+            if self.verbose:
+                print("Resetting dist_num.")
             return tf.convert_to_tensor([[]], dtype = dist.dtype) # type: ignore
         
-        print("Checking and setting numerical distributions.")
+        if self.verbose:
+            print("Checking and setting numerical distributions.")
         
         dist_1_num = tf.cond(self.is_symb_1,
                              true_fn = lambda: tf.cond(self.small_sample,
@@ -964,7 +971,8 @@ class TwoSampleTestSlicedBase(TwoSampleTestBase):
         Function that generates random directions.
         Directions are always generated with the numpy backend for reproducibility
         """
-        print("Generating random directions based on nslices, ndims, and seed_slicing.")
+        if self.verbose:
+            print("Generating random directions based on nslices, ndims, and seed_slicing.")
         ndims: int = self.Inputs.ndims
         directions: DataTypeNP
         reset_random_seeds(seed = self.seed_slicing)

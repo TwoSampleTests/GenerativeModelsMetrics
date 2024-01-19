@@ -190,6 +190,7 @@ class LRMetric(TwoSampleTestBase):
     """
     def __init__(self, 
                  data_input: TwoSampleTestInputs,
+                 null_test: bool = False,
                  progress_bar: bool = False,
                  verbose: bool = False
                 ) -> None:
@@ -201,10 +202,21 @@ class LRMetric(TwoSampleTestBase):
         self._end: float
         self._pbar: tqdm
         self._Results: TwoSampleTestResults
+        # New attributes
+        self._null: bool = null_test
     
         super().__init__(data_input = data_input, 
                          progress_bar = progress_bar,
                          verbose = verbose)
+        
+        if self.null:
+            print("To run under the alternative hypothesis, set the `null_test` attribute to False.")
+        else:
+            print("To run under the null hypothesis, set the `null_test` attribute to True.")
+        
+    @property
+    def null(self) -> bool:
+        return self._null
         
     def compute(self) -> None:
         """
@@ -266,15 +278,8 @@ class LRMetric(TwoSampleTestBase):
             stop_calculation()
         if not self.Inputs.is_symb_1 or not self.Inputs.is_symb_2:
             stop_calculation()
-        if isinstance(self.Inputs.dist_1_num, np.ndarray):
-            dist_1_num: DataTypeNP = self.Inputs.dist_1_num
-        else:
-            dist_1_num = self.Inputs.dist_1_num.numpy() # type: ignore
-        if isinstance(self.Inputs.dist_2_num, np.ndarray):
-            dist_2_num: DataTypeNP = self.Inputs.dist_2_num
-        else:
-            dist_2_num = self.Inputs.dist_2_num.numpy() # type: ignore
         ndims: int = self.Inputs.ndims
+        null: bool = self.null
         niter: int
         batch_size: int
         niter, batch_size = self.get_niter_batch_size_np() # type: ignore
@@ -375,18 +380,11 @@ class LRMetric(TwoSampleTestBase):
             return logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered
         
         for k in range(niter):
-            if not np.shape(dist_1_num[0])[0] == 0 and not np.shape(dist_2_num[0])[0] == 0:
-                dist_1_k = tf.convert_to_tensor(dist_1_num[k*batch_size:(k+1)*batch_size,:])
-                dist_2_k = tf.convert_to_tensor(dist_2_num[k*batch_size:(k+1)*batch_size,:])
-            elif not np.shape(dist_1_num[0])[0] == 0 and np.shape(dist_2_num[0])[0] == 0:
-                dist_1_k = tf.convert_to_tensor(dist_1_num[k*batch_size:(k+1)*batch_size,:])
-                dist_2_k = tf.cast(set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
-            elif np.shape(dist_1_num[0])[0] == 0 and not np.shape(dist_2_num[0])[0] == 0:
-                dist_1_k = tf.cast(set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
-                dist_2_k = tf.convert_to_tensor(dist_2_num[k*batch_size:(k+1)*batch_size,:])
+            dist_1_k = tf.cast(set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
+            if null:
+                dist_2_k = tf.cast(set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
             else:
-                dist_1_k = tf.cast(set_dist_num_from_symb(dist = dist_1_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
-                dist_2_k = tf.cast(set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype), dtype = dtype) # type: ignore
+                dist_2_k = tf.cast(set_dist_num_from_symb(dist = dist_2_symb, nsamples = batch_size, dtype = dtype), dtype = dtype)
                 
             # Compute log probabilities
             logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered = get_logprobs(dist_1_num = dist_1_k,
@@ -407,8 +405,11 @@ class LRMetric(TwoSampleTestBase):
                 print(f"Warning: Removed a fraction {fraction} of samples due to non-finite log probabilities.")
                 
                 # Generate extra samples
-                dist_1_k_extra: tf.Tensor = tf.cast(dist_1_symb.sample(num_missing), dtype=dtype)  # type: ignore
-                dist_2_k_extra: tf.Tensor = tf.cast(dist_2_symb.sample(num_missing), dtype=dtype)  # type: ignore
+                dist_1_k_extra: tf.Tensor = tf.cast(dist_1_symb.sample(num_missing), dtype=dtype) # type: ignore
+                if null:
+                    dist_2_k_extra: tf.Tensor = tf.cast(dist_1_symb.sample(num_missing), dtype=dtype) # type: ignore
+                else:
+                    dist_2_k_extra: tf.Tensor = tf.cast(dist_2_symb.sample(num_missing), dtype=dtype) # type: ignore
                 
                 # Compute log probabilities
                 logprob_ref_ref_filtered_extra, logprob_ref_alt_filtered_extra, logprob_alt_alt_filtered_extra = get_logprobs(dist_1_num = dist_1_k_extra,
@@ -441,7 +442,11 @@ class LRMetric(TwoSampleTestBase):
         
         timestamp = datetime.now().isoformat()
         test_name = "LR Test_np"
-        parameters = {**self.param_dict, **{"backend": "numpy"}}
+        if self.null:
+            test_type_dict: Dict[str,str] = {"test_type": "null test"}
+        else:
+            test_type_dict = {"test_type": "alternative test"}
+        parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "numpy"}, **test_type_dict}
         result_value = {"logprob_ref_ref_sum_list": np.array(logprob_ref_ref_sum_list),
                         "logprob_ref_alt_sum_list": np.array(logprob_ref_alt_sum_list),
                         "logprob_alt_alt_sum_list": np.array(logprob_alt_alt_sum_list),
@@ -494,15 +499,8 @@ class LRMetric(TwoSampleTestBase):
             stop_calculation()
         if not self.Inputs.is_symb_1 or not self.Inputs.is_symb_2:
             stop_calculation()
-        if isinstance(self.Inputs.dist_1_num, np.ndarray):
-            dist_1_num: tf.Tensor = tf.convert_to_tensor(self.Inputs.dist_1_num)
-        else:
-            dist_1_num = self.Inputs.dist_1_num # type: ignore
-        if isinstance(self.Inputs.dist_2_num, np.ndarray):
-            dist_2_num: tf.Tensor = tf.convert_to_tensor(self.Inputs.dist_2_num)
-        else:
-            dist_2_num = self.Inputs.dist_2_num # type: ignore
         ndims: int = self.Inputs.ndims
+        null: bool = self.null
         niter: int
         batch_size: int
         niter, batch_size = [int(i) for i in self.get_niter_batch_size_tf()] # type: ignore
@@ -526,9 +524,6 @@ class LRMetric(TwoSampleTestBase):
                                    nsamples: int,
                                   ) -> tf.Tensor:
             dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
-            return dist_num
-        
-        def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
         
         def get_logprobs(dist_1_num: DataTypeTF,
@@ -557,8 +552,6 @@ class LRMetric(TwoSampleTestBase):
         #@tf.function(reduce_retracing=True)
         def compute_test() -> Tuple[DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF]:
             # Check if numerical distributions are empty and print a warning if so
-            conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
-            conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
             
             # Initialize the result TensorArray
             res: tf.TensorArray = tf.TensorArray(dtype, size = niter)
@@ -570,12 +563,11 @@ class LRMetric(TwoSampleTestBase):
             
             def body(i, res):
                 # Define the loop body to vectorize over ndims*chunk_size
-                dist_1_k: DataTypeTF = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size), # type: ignore
-                                               false_fn = lambda: return_dist_num(dist_1_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
-                dist_2_k: DataTypeTF = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size), # type: ignore
-                                               false_fn = lambda: return_dist_num(dist_2_num[i * batch_size: (i + 1) * batch_size, :])) # type: ignore
+                dist_1_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size) # type: ignore
+                if null:
+                    dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size) # type: ignore
+                else:
+                    dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_2_symb, nsamples = batch_size) # type: ignore
                 
                 # Compute log probabilities
                 logprob_ref_ref_filtered: DataTypeTF
@@ -600,7 +592,10 @@ class LRMetric(TwoSampleTestBase):
                     
                     # Generate extra samples
                     dist_1_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_1_symb, nsamples = num_missing), dtype=dtype) # type: ignore
-                    dist_2_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_2_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+                    if null:
+                        dist_2_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_1_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+                    else:
+                        dist_2_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_2_symb, nsamples = num_missing), dtype=dtype) # type: ignore
                     
                     # Compute log probabilities
                     logprob_ref_ref_filtered_extra: DataTypeTF
@@ -637,7 +632,7 @@ class LRMetric(TwoSampleTestBase):
                 
                 #result_value: DataTypeTF = tf.stack([logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm]) # type: ignore
                 
-                result_value: DataTypeTF = tf.concat([logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm], axis=0) # type: ignore
+                result_value: DataTypeTF = tf.stack([logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm]) # type: ignore
                 
                 res = res.write(i, result_value)
                 return i+1, res
@@ -675,7 +670,11 @@ class LRMetric(TwoSampleTestBase):
         
         timestamp: str = datetime.now().isoformat()
         test_name: str = "LR Test_tf"
-        parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}}
+        if self.null:
+            test_type_dict: Dict[str,str] = {"test_type": "null test"}
+        else:
+            test_type_dict = {"test_type": "alternative test"}
+        parameters: Dict[str, Any] = {**self.param_dict, **{"backend": "tensorflow"}, **test_type_dict}
         result_value: Dict[str, Optional[DataTypeNP]] = {"logprob_ref_ref_sum_list": logprob_ref_ref_sum_list.numpy(),
                                                           "logprob_ref_alt_sum_list": logprob_ref_alt_sum_list.numpy(),
                                                           "logprob_alt_alt_sum_list": logprob_alt_alt_sum_list.numpy(),

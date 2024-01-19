@@ -543,8 +543,8 @@ class FPDMetric(TwoSampleTestBase):
         batches_list: tf.Tensor
         vals_list, batches_list  = compute_test(max_vectorize = max_vectorize)
                 
-        print(f"vals_list: {vals_list=}")
-        print(f"batches_list: {batches_list=}")
+        #print(f"vals_list: {vals_list=}")
+        #print(f"batches_list: {batches_list=}")
         
         metric_list: DataTypeNP
         metric_error_list: DataTypeNP
