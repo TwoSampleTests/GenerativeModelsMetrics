@@ -11,7 +11,9 @@ __all__ = [
 import os
 import inspect
 import numpy as np
+import pandas as pd
 import random
+import json
 from scipy.stats import moment # type: ignore
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -19,7 +21,7 @@ from tensorflow_probability import distributions as tfd
 from numpy import random as npr
 from timeit import default_timer as timer
 
-from typing import Tuple, Union, Optional, Type, Callable, Dict, List
+from typing import Tuple, Union, Optional, Type, Callable, Dict, List, Any
 from numpy import typing as npt
 # For future tensorflow typing support
 #import tensorflow.python.types.core as tft
@@ -552,3 +554,44 @@ def convert_types_dict(d):
         else:
             dd[k] = np.array(v).tolist()
     return dd
+
+class CustomEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()  # Convert arrays to lists
+        elif isinstance(obj, np.generic):
+            return obj.item()  # Convert NumPy scalars to Python scalars
+        elif isinstance(obj, tf.DType):
+            return obj.name  # Assuming 'DType' objects have a 'name' attribute for their string representation
+        elif isinstance(obj, np.dtype):
+            return np.dtype(obj).name
+        elif isinstance(obj, (np.integer, np.floating, np.bool_)):
+            return obj.item()
+        elif callable(obj):
+            return "callable: {}".format(obj.__name__)
+        
+        # Fall back to the default behavior
+        return json.JSONEncoder.default(self, obj)
+
+def save_update_matrics_config(metrics_config: Dict[str,Any],
+                               metrics_config_file: str
+                              ) -> pd.DataFrame:
+    # Step 1: Read the existing content if the file exists
+    existing_data = {}
+    if os.path.exists(metrics_config_file):
+        try:
+            with open(metrics_config_file, "r") as file:
+                existing_data = json.load(file)
+        except json.JSONDecodeError:
+            # File is empty or corrupted, start with an empty dictionary
+            existing_data = {}
+
+    # Step 2: Update the dictionary with new results
+    existing_data.update(metrics_config)
+
+    # Step 3: Write the updated dictionary back to the file
+    # Use this custom encoder when dumping your JSON data
+    with open(metrics_config_file, "w") as file:
+        json.dump(existing_data, file, cls=CustomEncoder, indent=4)
+    
+    return pd.DataFrame(metrics_config)
