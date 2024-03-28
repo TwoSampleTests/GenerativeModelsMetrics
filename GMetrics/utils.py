@@ -573,7 +573,7 @@ class CustomEncoder(json.JSONEncoder):
         # Fall back to the default behavior
         return json.JSONEncoder.default(self, obj)
 
-def save_update_matrics_config(metrics_config: Dict[str,Any],
+def save_update_metrics_config(metrics_config: Dict[str,Any],
                                metrics_config_file: str
                               ) -> pd.DataFrame:
     # Step 1: Read the existing content if the file exists
@@ -593,5 +593,8 @@ def save_update_matrics_config(metrics_config: Dict[str,Any],
     # Use this custom encoder when dumping your JSON data
     with open(metrics_config_file, "w") as file:
         json.dump(existing_data, file, cls=CustomEncoder, indent=4)
+        
+    dict_values_list = [x.values() for x in metrics_config.values()]
+    flat_list_of_dicts = [item for sublist in dict_values_list for item in sublist]
     
-    return pd.DataFrame(metrics_config)
+    return pd.DataFrame(flat_list_of_dicts)

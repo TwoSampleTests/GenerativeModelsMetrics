@@ -455,7 +455,7 @@ class LRMetric(TwoSampleTestBase):
         result: TwoSampleTestResult = TwoSampleTestResult(timestamp, test_name, parameters, result_value) # type: ignore
         self.Results.append(result)
         
-    def Test_tf(self, max_vectorize: int = 100) -> None:
+    def Test_tf(self) -> None:
         """
         Function that computes the Frobenuis norm between the correlation matrices 
         of the two samples using tensorflow functions.
@@ -474,7 +474,6 @@ class LRMetric(TwoSampleTestBase):
         --------
         None
         """
-        max_vectorize = int(max_vectorize)
         # Utility function
         def stop_calculation() -> None:
             timestamp: str = datetime.now().isoformat()
@@ -550,132 +549,111 @@ class LRMetric(TwoSampleTestBase):
             
             return logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered
         
-        def batched_test(start: tf.Tensor, 
-                         end: tf.Tensor
-                        ) -> DataTypeTF:
-            # Define the loop body to vectorize over ndims*chunk_size
-            dist_1_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)) # type: ignore
-            if null:
-                dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)) # type: ignore
-            else:
-                dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)) # type: ignore
+        #@tf.function(reduce_retracing=True)
+        def compute_test() -> Tuple[DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF]:
+            # Check if numerical distributions are empty and print a warning if so
             
-            # Compute log probabilities
-            logprob_ref_ref_filtered: DataTypeTF
-            logprob_ref_alt_filtered: DataTypeTF
-            logprob_alt_alt_filtered: DataTypeTF
-            logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered = get_logprobs(dist_1_num = dist_1_k, 
-                                                                                                        dist_2_num = dist_2_k, 
-                                                                                                        dist_1_symb = dist_1_symb, # type: ignore
-                                                                                                        dist_2_symb = dist_2_symb) # type: ignore
+            # Initialize the result TensorArray
+            res: tf.TensorArray = tf.TensorArray(dtype, size = niter)
+            logprob_ref_ref_sum = tf.TensorArray(dtype, size = niter)
+            logprob_ref_alt_sum = tf.TensorArray(dtype, size = niter)
+            logprob_alt_alt_sum = tf.TensorArray(dtype, size = niter)
+            lik_ratio = tf.TensorArray(dtype, size = niter)
+            lik_ratio_norm = tf.TensorArray(dtype, size = niter)
             
-            # Count the number of finite samples
-            n_finite: tf.Tensor = tf.shape(logprob_ref_ref_filtered)[0]
-            
-            max_iter: int = 100
-            iter: int = 0
-            
-            while n_finite < batch_size and iter < max_iter:
-                iter += 1
-                num_missing: int = batch_size - n_finite
-                fraction: float = num_missing / batch_size
-                print(f"Warning: Removed a fraction {fraction} of samples due to non-finite log probabilities.")
-                
-                # Generate extra samples
-                dist_1_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_1_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+            def body(i, res):
+                # Define the loop body to vectorize over ndims*chunk_size
+                dist_1_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size) # type: ignore
                 if null:
-                    dist_2_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_1_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+                    dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size) # type: ignore
                 else:
-                    dist_2_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_2_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+                    dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_2_symb, nsamples = batch_size) # type: ignore
                 
                 # Compute log probabilities
-                logprob_ref_ref_filtered_extra: DataTypeTF
-                logprob_ref_alt_filtered_extra: DataTypeTF
-                logprob_alt_alt_filtered_extra: DataTypeTF
-                logprob_ref_ref_filtered_extra, logprob_ref_alt_filtered_extra, logprob_alt_alt_filtered_extra = get_logprobs(dist_1_num = dist_1_k_extra,
-                                                                                                                              dist_2_num = dist_2_k_extra,
-                                                                                                                              dist_1_symb = dist_1_symb, # type: ignore
-                                                                                                                              dist_2_symb = dist_2_symb) # type: ignore
-                                
-                # Append extra samples to the filtered log probabilities
-                n_finite_extra: tf.Tensor = tf.shape(logprob_ref_ref_filtered_extra)[0]
-                if n_finite_extra > 0:
-                    logprob_ref_ref_filtered = tf.concat([logprob_ref_ref_filtered, logprob_ref_ref_filtered_extra], axis = 0) # type: ignore
-                    logprob_ref_alt_filtered = tf.concat([logprob_ref_alt_filtered, logprob_ref_alt_filtered_extra], axis = 0) # type: ignore
-                    logprob_alt_alt_filtered = tf.concat([logprob_alt_alt_filtered, logprob_alt_alt_filtered_extra], axis = 0) # type: ignore
-                    
+                logprob_ref_ref_filtered: DataTypeTF
+                logprob_ref_alt_filtered: DataTypeTF
+                logprob_alt_alt_filtered: DataTypeTF
+                logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered = get_logprobs(dist_1_num = dist_1_k, 
+                                                                                                            dist_2_num = dist_2_k, 
+                                                                                                            dist_1_symb = dist_1_symb, # type: ignore
+                                                                                                            dist_2_symb = dist_2_symb) # type: ignore
+                
                 # Count the number of finite samples
                 n_finite: tf.Tensor = tf.shape(logprob_ref_ref_filtered)[0]
                 
-            logprob_ref_ref_filtered = tf.expand_dims(logprob_ref_ref_filtered, axis=1)
-            logprob_ref_alt_filtered = tf.expand_dims(logprob_ref_alt_filtered, axis=1)
-            logprob_alt_alt_filtered = tf.expand_dims(logprob_alt_alt_filtered, axis=1)    
+                max_iter: int = 100
+                iter: int = 0
+                
+                while n_finite < batch_size and iter < max_iter:
+                    iter += 1
+                    num_missing: int = batch_size - n_finite
+                    fraction: float = num_missing / batch_size
+                    print(f"Warning: Removed a fraction {fraction} of samples due to non-finite log probabilities.")
                     
-            result_value: DataTypeTF = tf.concat([logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered], axis=1) # type: ignore
-            
-            return result_value
-        
-        #@tf.function(reduce_retracing=True)
-        def compute_test(max_vectorize: int = 100) -> Tuple[DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF]:            
-            # Ensure that max_vectorize is an integer larger than ndims
-            max_vectorize = int(tf.cast(tf.minimum(max_vectorize, niter),tf.int32)) # type: ignore
-
-            # Compute the maximum number of iterations per chunk
-            max_iter_per_chunk: int = max_vectorize # type: ignore
-
-            # Compute the number of chunks
-            nchunks: int = int(tf.cast(tf.math.ceil(niter / max_iter_per_chunk), tf.int32)) # type: ignore
-            conditional_tf_print(tf.logical_and(self.verbose,tf.logical_not(tf.equal(nchunks,1))), "nchunks =", nchunks) # type: ignore
-            
-            # Initialize the result TensorArray
-            res: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
-            logprob_ref_ref: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
-            logprob_ref_alt: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
-            logprob_alt_alt: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
-            
-            def body(i, res):
-                start = i * max_iter_per_chunk
-                end = tf.minimum(start + max_iter_per_chunk, niter)
-                conditional_tf_print(tf.logical_and(tf.logical_or(tf.math.logical_not(tf.equal(start,0)),tf.math.logical_not(tf.equal(end,niter))), self.verbose), "Iterating from", start, "to", end, "out of", niter, ".") # type: ignore
-                chunk_result = batched_test(start, end) # type: ignore
-                res = res.write(i, chunk_result)
+                    # Generate extra samples
+                    dist_1_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_1_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+                    if null:
+                        dist_2_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_1_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+                    else:
+                        dist_2_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_2_symb, nsamples = num_missing), dtype=dtype) # type: ignore
+                    
+                    # Compute log probabilities
+                    logprob_ref_ref_filtered_extra: DataTypeTF
+                    logprob_ref_alt_filtered_extra: DataTypeTF
+                    logprob_alt_alt_filtered_extra: DataTypeTF
+                    logprob_ref_ref_filtered_extra, logprob_ref_alt_filtered_extra, logprob_alt_alt_filtered_extra = get_logprobs(dist_1_num = dist_1_k_extra,
+                                                                                                                                  dist_2_num = dist_2_k_extra,
+                                                                                                                                  dist_1_symb = dist_1_symb, # type: ignore
+                                                                                                                                  dist_2_symb = dist_2_symb) # type: ignore
+                                    
+                    # Append extra samples to the filtered log probabilities
+                    n_finite_extra: tf.Tensor = tf.shape(logprob_ref_ref_filtered_extra)[0]
+                    if n_finite_extra > 0:
+                        logprob_ref_ref_filtered = tf.concat([logprob_ref_ref_filtered, logprob_ref_ref_filtered_extra], axis = 0) # type: ignore
+                        logprob_ref_alt_filtered = tf.concat([logprob_ref_alt_filtered, logprob_ref_alt_filtered_extra], axis = 0) # type: ignore
+                        logprob_alt_alt_filtered = tf.concat([logprob_alt_alt_filtered, logprob_alt_alt_filtered_extra], axis = 0) # type: ignore
+                        
+                    # Count the number of finite samples
+                    n_finite: tf.Tensor = tf.shape(logprob_ref_ref_filtered)[0]
+                
+                logprob_ref_ref_sum: DataTypeTF
+                logprob_ref_alt_sum: DataTypeTF
+                logprob_alt_alt_sum: DataTypeTF
+                lik_ratio: DataTypeTF
+                lik_ratio_norm: DataTypeTF
+                logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm = lr_statistic_tf(logprob_ref_ref_filtered, 
+                                                                                                                           logprob_ref_alt_filtered, 
+                                                                                                                           logprob_alt_alt_filtered) # type: ignore
+                logprob_ref_ref_sum = tf.cast(logprob_ref_ref_sum, dtype = dtype) # type: ignore
+                logprob_ref_alt_sum = tf.cast(logprob_ref_alt_sum, dtype = dtype) # type: ignore
+                logprob_alt_alt_sum = tf.cast(logprob_alt_alt_sum, dtype = dtype) # type: ignore
+                lik_ratio = tf.cast(lik_ratio, dtype = dtype) # type: ignore
+                lik_ratio_norm = tf.cast(lik_ratio_norm, dtype = dtype) # type: ignore
+                
+                #result_value: DataTypeTF = tf.stack([logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm]) # type: ignore
+                
+                result_value: DataTypeTF = tf.stack([logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm]) # type: ignore
+                
+                res = res.write(i, result_value)
                 return i+1, res
     
-            _, res = tf.while_loop(lambda i, _: i < nchunks, body, [0, res])
-            
-            for i in range(nchunks):
-                res_i = res.read(i)
-                logprob_ref_ref = logprob_ref_ref.write(i, res_i[:, 0])
-                logprob_ref_alt = logprob_ref_alt.write(i, res_i[:, 1])
-                logprob_alt_alt = logprob_alt_alt.write(i, res_i[:, 2])
-                
-            logprob_ref_ref_stacked: DataTypeTF = tf.reshape(logprob_ref_ref.stack(), (niter,-1))
-            logprob_ref_alt_stacked: DataTypeTF = tf.reshape(logprob_ref_alt.stack(), (niter,-1))
-            logprob_alt_alt_stacked: DataTypeTF = tf.reshape(logprob_alt_alt.stack(), (niter,-1))
-            
-            logprob_ref_ref_sum_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
-            logprob_ref_alt_sum_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
-            logprob_alt_alt_sum_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
-            lik_ratio_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
-            lik_ratio_norm_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
+            _, res = tf.while_loop(lambda i, _: i < niter, body, [0, res])
             
             for i in range(niter):
-                logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm = lr_statistic_tf(logprob_ref_ref_stacked[i], # type: ignore 
-                                                                                                                           logprob_ref_alt_stacked[i], 
-                                                                                                                           logprob_alt_alt_stacked[i])
-                logprob_ref_ref_sum_list = logprob_ref_ref_sum_list.write(i, logprob_ref_ref_sum)
-                logprob_ref_alt_sum_list = logprob_ref_alt_sum_list.write(i, logprob_ref_alt_sum)
-                logprob_alt_alt_sum_list = logprob_alt_alt_sum_list.write(i, logprob_alt_alt_sum)
-                lik_ratio_list = lik_ratio_list.write(i, lik_ratio)
-                lik_ratio_norm_list = lik_ratio_norm_list.write(i, lik_ratio_norm)
-            
-            logprob_ref_ref_sum_out: DataTypeTF  = tf.reshape(logprob_ref_ref_sum_list.stack(), (niter,))
-            logprob_ref_alt_sum_out: DataTypeTF = tf.reshape(logprob_ref_alt_sum_list.stack(), (niter,))
-            logprob_alt_alt_sum_out: DataTypeTF = tf.reshape(logprob_alt_alt_sum_list.stack(), (niter,))
-            lik_ratio_out: DataTypeTF = tf.reshape(lik_ratio_list.stack(), (niter,))
-            lik_ratio_norm_out: DataTypeTF = tf.reshape(lik_ratio_norm_list.stack(), (niter,))
+                res_i = res.read(i)
+                logprob_ref_ref_sum = logprob_ref_ref_sum.write(i, res_i[0])
+                logprob_ref_alt_sum = logprob_ref_alt_sum.write(i, res_i[1])
+                logprob_alt_alt_sum = logprob_alt_alt_sum.write(i, res_i[2])
+                lik_ratio = lik_ratio.write(i, res_i[3])
+                lik_ratio_norm = lik_ratio_norm.write(i, res_i[4])
+                
+            logprob_ref_ref_sum_stacked: DataTypeTF = tf.reshape(logprob_ref_ref_sum.stack(), [-1])
+            logprob_ref_alt_sum_stacked: DataTypeTF = tf.reshape(logprob_ref_alt_sum.stack(), [-1])
+            logprob_alt_alt_sum_stacked: DataTypeTF = tf.reshape(logprob_alt_alt_sum.stack(), [-1])
+            lik_ratio_stacked: DataTypeTF = tf.reshape(lik_ratio.stack(), [-1])
+            lik_ratio_norm_stacked: DataTypeTF = tf.reshape(lik_ratio_norm.stack(), [-1])
         
-            return logprob_ref_ref_sum_out, logprob_ref_alt_sum_out, logprob_alt_alt_sum_out, lik_ratio_out, lik_ratio_norm_out
+            return logprob_ref_ref_sum_stacked, logprob_ref_alt_sum_stacked, logprob_alt_alt_sum_stacked, lik_ratio_stacked, lik_ratio_norm_stacked
 
         start_calculation()
         
@@ -686,7 +664,7 @@ class LRMetric(TwoSampleTestBase):
         logprob_alt_alt_sum_list: DataTypeTF
         lik_ratio_list: DataTypeTF
         lik_ratio_norm_list: DataTypeTF
-        logprob_ref_ref_sum_list, logprob_ref_alt_sum_list, logprob_alt_alt_sum_list, lik_ratio_list, lik_ratio_norm_list = compute_test(max_vectorize = max_vectorize) # type: ignore
+        logprob_ref_ref_sum_list, logprob_ref_alt_sum_list, logprob_alt_alt_sum_list, lik_ratio_list, lik_ratio_norm_list = compute_test()
                              
         end_calculation()
         
