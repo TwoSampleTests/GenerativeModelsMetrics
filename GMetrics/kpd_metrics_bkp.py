@@ -349,47 +349,35 @@ class KPDMetric(TwoSampleTestBase):
                     
         def set_dist_num_from_symb(dist: DistTypeTF,
                                    nsamples: int,
-                                   seed_generator: tf.random.Generator
                                   ) -> tf.Tensor:
-            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = seed_generator, strategy = None) #self.Inputs.strategy) # type: ignore
+            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, strategy = self.Inputs.strategy) # type: ignore
             return dist_num
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
-
-        @tf.function
-        def batched_test_sub(dist_1_k_replica, dist_2_k_replica):
-            def loop_body(idx):
-                # Operations to be performed on each GPU
-                vals = kpd_tf(dist_1_k_replica[idx, :, :], dist_2_k_replica[idx, :, :], **self.kpd_kwargs)
-                vals = tf.cast(vals, dtype=dtype)
-                return vals
-
-            # Using tf.vectorized_map to parallelize operations across the first dimension of the input tensor
-            vals_list = tf.vectorized_map(loop_body, tf.range(tf.shape(dist_1_k_replica)[0]))
-            return vals_list
-        
-        @tf.function
+            
         def batched_test(start: tf.Tensor, 
-                         end: tf.Tensor,
-                         seed_generator: tf.random.Generator
+                         end: tf.Tensor
                         ) -> DataTypeTF:
             # Define batched distributions
             dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end - start), seed_generator = seed_generator),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)),
                                                false_fn = lambda: return_dist_num(dist_1_num[start*batch_size:end*batch_size, :])) # type: ignore
             dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end - start), seed_generator = seed_generator),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)),
                                                false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
 
-            dist_1_k = tf.reshape(dist_1_k, (end - start, batch_size, ndims))
-            dist_2_k = tf.reshape(dist_2_k, (end - start, batch_size, ndims))
+            dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims))
+            dist_2_k = tf.reshape(dist_2_k, (end-start, batch_size, ndims))
 
-            #if self.Inputs.strategy:
-            #    per_replica_results = self.Inputs.strategy.run(batched_test_sub, args=(dist_1_k, dist_2_k))
-            #    vals_list: tf.Tensor = self.Inputs.strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_results, axis=None)
-            #else:
-            vals_list = batched_test_sub(dist_1_k, dist_2_k)
+            # Define the loop body to vectorize over ndims*chunk_size
+            def loop_body(idx):
+                vals = kpd_tf(dist_1_k[idx, :, :], dist_2_k[idx, :, :], **self.kpd_kwargs) # type: ignore
+                vals = tf.cast(vals, dtype=dtype)
+                return vals
+
+            # Vectorize over ndims*chunk_size
+            vals_list: tf.Tensor = tf.vectorized_map(loop_body, tf.range(end-start)) # type: ignore
             
             res: DataTypeTF = vals_list
             #tf.print(f"vals shape: {vals_list.shape}")
@@ -398,9 +386,7 @@ class KPDMetric(TwoSampleTestBase):
     
             return res
         
-        def compute_test(seed_generator: tf.random.Generator,
-                         max_vectorize: int = 100
-                        ) -> Tuple[DataTypeTF]:
+        def compute_test(max_vectorize: int = 100) -> Tuple[DataTypeTF]:
             # Check if numerical distributions are empty and print a warning if so
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_1_num tensor is empty. Batches will be generated 'on-the-fly' from dist_1_symb.") # type: ignore
             conditional_tf_print(tf.logical_and(tf.equal(tf.shape(dist_1_num[0])[0],0),self.verbose), "The dist_2_num tensor is empty. Batches will be generated 'on-the-fly' from dist_2_symb.") # type: ignore
@@ -418,18 +404,13 @@ class KPDMetric(TwoSampleTestBase):
             res: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
             #res_vals: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
 
-            #@tf.function
             def body(i: int, 
                      res: tf.TensorArray
                     ) -> Tuple[int, tf.TensorArray]:
                 start: tf.Tensor = tf.cast(i * max_iter_per_chunk, tf.int32) # type: ignore
                 end: tf.Tensor = tf.cast(tf.minimum(start + max_iter_per_chunk, niter), tf.int32) # type: ignore
                 conditional_tf_print(tf.logical_and(tf.logical_or(tf.math.logical_not(tf.equal(start,0)),tf.math.logical_not(tf.equal(end,niter))), self.verbose), "Iterating from", start, "to", end, "out of", niter, ".") # type: ignore
-                if self.Inputs.strategy:
-                    per_replica_chunk_result = self.Inputs.strategy.run(batched_test, args=(start, end, seed_generator))
-                    chunk_result: DataTypeTF = self.Inputs.strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_chunk_result, axis=None)
-                else:
-                    chunk_result: DataTypeTF = batched_test(start, end, seed_generator = seed_generator) # type: ignore
+                chunk_result: DataTypeTF = batched_test(start, end) # type: ignore
                 res = res.write(i, chunk_result)
                 return i+1, res
             
@@ -447,15 +428,12 @@ class KPDMetric(TwoSampleTestBase):
         
         self.Inputs.reset_seed_generator()
         
+        vals_list: DataTypeTF
         if self.Inputs.strategy:
             with self.Inputs.strategy.scope():
-                seed_generator = tf.random.Generator.from_seed(self.Inputs.seed)
-                vals_list: DataType = compute_test(seed_generator = seed_generator,
-                                                   max_vectorize = max_vectorize)
+                vals_list = compute_test(max_vectorize = max_vectorize)
         else:
-            seed_generator = self.Inputs.seed_generator
-            vals_list: DataType = compute_test(seed_generator = seed_generator,
-                                               max_vectorize = max_vectorize)
+            vals_list = compute_test(max_vectorize = max_vectorize)
                 
         #print(f"vals_list: {vals_list=}")
         

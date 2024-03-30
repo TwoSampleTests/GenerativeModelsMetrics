@@ -317,7 +317,7 @@ class SKSTest(TwoSampleTestSlicedBase):
                                    dtype: Union[type, np.dtype],
                                   ) -> DataTypeNP:
             if isinstance(dist, tfp.distributions.Distribution):
-                dist_num_tmp: DataTypeTF = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+                dist_num_tmp: DataTypeTF = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = dtype, seed_generator = self.Inputs.seed_generator, strategy = self.Inputs.strategy) # type: ignore
                 dist_num: DataTypeNP = dist_num_tmp.numpy().astype(dtype) # type: ignore
             elif isinstance(dist, NumpyDistribution):
                 dist_num = dist.sample(nsamples).astype(dtype = dtype)
@@ -453,7 +453,7 @@ class SKSTest(TwoSampleTestSlicedBase):
         def set_dist_num_from_symb(dist: DistTypeTF,
                                    nsamples: int,
                                   ) -> tf.Tensor:
-            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, mirror_strategy = self.Inputs.mirror_strategy) # type: ignore
+            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, strategy = self.Inputs.strategy) # type: ignore
             return dist_num
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:

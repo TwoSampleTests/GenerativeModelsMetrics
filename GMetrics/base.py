@@ -54,7 +54,7 @@ class TwoSampleTestInputs(object):
         self._dtype_input: tf.DType = dtype_input
         self._seed: int = seed_input if seed_input is not None else int(np.random.randint(0, 2**32 - 1))
         self._use_tf: bool = use_tf
-        self._mirror_strategy: bool = mirror_strategy
+        self.mirror_strategy = mirror_strategy # Setting using the setter to ensure that also self._strategy gets properly defined
         self.verbose: bool = verbose
         
         # Attributes from preprocessing
@@ -73,6 +73,7 @@ class TwoSampleTestInputs(object):
         self._dtype: DTypeType
         self._small_sample: bool
         self._seed_generator: tf.random.Generator
+        self._strategy: Optional[tf.distribute.Strategy]
         
         # Preprocessing
         self.__preprocess(verbose = verbose)
@@ -232,6 +233,14 @@ class TwoSampleTestInputs(object):
                 self._mirror_strategy = bool(mirror_strategy)
             else:
                 raise TypeError("mirror_strategy must be a bool or tf.Tensor with numpy() method returning a np.bool_")
+        if self._mirror_strategy:
+            self._strategy = tf.distribute.MirroredStrategy()
+        else:
+            self._strategy = None
+            
+    @property
+    def strategy(self) -> Optional[tf.distribute.Strategy]:
+        return self._strategy
         
     @property
     def verbose(self) -> bool: # type: ignore
@@ -377,7 +386,7 @@ class TwoSampleTestInputs(object):
                     print("Using numpy mode with TensorFlow inputs.")
                 is_symb, dist_symb, dist_num, ndims, nsamples = parse_input_dist_tf(dist_input = dist_input, verbose = verbose)
                 is_symb = bool(is_symb)
-                dist_num = dist_num.numpy()
+                dist_num = dist_num.numpy() # type: ignore
                 ndims = int(ndims) # type: ignore
                 nsamples = int(nsamples) # type: ignore
                 return is_symb, dist_symb, dist_num, ndims, nsamples
@@ -562,7 +571,7 @@ class TwoSampleTestInputs(object):
             if self.verbose:
                 print("Setting dist_num from dist_symb.")
             if isinstance(dist, tfp.distributions.Distribution):
-                dist_num: tf.Tensor = generate_and_clean_data(dist, self.nsamples, self.batch_size_gen, dtype = self.dtype, seed_generator = self.seed_generator, mirror_strategy = self.mirror_strategy) # type: ignore
+                dist_num: tf.Tensor = generate_and_clean_data(dist, self.nsamples, self.batch_size_gen, dtype = self.dtype, seed_generator = self.seed_generator, strategy = self.strategy) # type: ignore
             else:
                 raise ValueError("dist should be an instance of tfp.distributions.Distribution.")
             return dist_num
@@ -596,8 +605,7 @@ class TwoSampleTestInputs(object):
         self._dist_1_num = tf.cast(dist_1_num, self.dtype)[:self.nsamples, :] # type: ignore
         self._dist_2_num = tf.cast(dist_2_num, self.dtype)[:self.nsamples, :] # type: ignore
         
-    def __check_set_distributions(self,
-                                  mirror_strategy: bool = False) -> None:
+    def __check_set_distributions(self) -> None:
         if self.use_tf:
             self.__check_set_distributions_tf()
         else:
@@ -871,8 +879,8 @@ class TwoSampleTestBase(ABC):
         nsamples: tf.Tensor = tf.cast(self.Inputs.nsamples, dtype = tf.int32) # type: ignore
         batch_size_test: tf.Tensor = tf.cast(self.Inputs.batch_size_test, dtype = tf.int32) # type: ignore
         niter: tf.Tensor = tf.cast(self.Inputs.niter, dtype = tf.int32) # type: ignore
-        batch_size_test_tmp = tf.cond(nsamples < batch_size_test * niter,
-                                    true_fn=lambda: nsamples // niter,
+        batch_size_test_tmp = tf.cond(nsamples < batch_size_test * niter, # type: ignore
+                                    true_fn=lambda: nsamples // niter, # type: ignore
                                     false_fn=lambda: batch_size_test)
         batch_size_test: tf.Tensor = tf.cast(batch_size_test_tmp, dtype = tf.int32) # type: ignore
         tf.debugging.assert_positive(batch_size_test, message="batch_size_test should be positive integer and number of samples should be larger than number of iterations.")
@@ -886,8 +894,8 @@ class TwoSampleTestBase(ABC):
             niter, batch_size_test = self.get_niter_batch_size_tf()
         output_dict = self.Inputs.param_dict
         niter_used = niter
-        output_dict["niter_used"] = int(niter_used)
-        output_dict["batch_size_test_used"] = int(batch_size_test)
+        output_dict["niter_used"] = int(niter_used) # type: ignore
+        output_dict["batch_size_test_used"] = int(batch_size_test) # type: ignore
         output_dict["computing_time"] = self.get_computing_time()
         output_dict["small_sample_threshold"] = self.small_sample_threshold
         output_dict["small_sample"] = self.small_sample
@@ -932,7 +940,7 @@ class TwoSampleTestSlicedBase(TwoSampleTestBase):
                          verbose = verbose)
     
         # From this class
-        self._seed_slicing: int = seed_slicing if seed_slicing is not None else int(self.Inputs.seed_generator.make_seeds(1)[0,0])
+        self._seed_slicing: int = seed_slicing if seed_slicing is not None else int(self.Inputs.seed_generator.make_seeds(1)[0,0]) # type: ignore
         self._nslices: int = nslices
         self._directions: DataTypeNP
         
@@ -979,7 +987,3 @@ class TwoSampleTestSlicedBase(TwoSampleTestBase):
         directions = np.random.randn(self.nslices, self.Inputs.ndims)
         directions /= np.linalg.norm(directions, axis=1)[:, None]
         self._directions = directions
-    
-        
-        
-        

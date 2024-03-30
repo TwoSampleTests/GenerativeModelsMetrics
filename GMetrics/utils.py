@@ -403,13 +403,12 @@ def generate_and_clean_data_mirror_1(dist: tfp.distributions.Distribution,
                                      n_samples: int,
                                      batch_size: int, 
                                      dtype: DTypeType,
-                                     seed_generator: tf.random.Generator
+                                     seed_generator: tf.random.Generator,
+                                     strategy: tf.distribute.Strategy
                                     ) -> tf.Tensor:
     #print("Generating data with mirrored strategy...")
     if dtype is None:
         dtype = tf.float32
-
-    strategy = tf.distribute.MirroredStrategy()
     
     # Calculate maximum number of iterations
     max_iterations = n_samples // batch_size + 1  # +1 to handle the case where there's a remainder
@@ -426,21 +425,21 @@ def generate_and_clean_data_mirror_1(dist: tfp.distributions.Distribution,
     samples = tf.TensorArray(dtype, size=max_iterations)  # Fixed size TensorArray
 
     i = 0
-    with strategy.scope():
-        while total_samples < n_samples:
-            try:
-                per_replica_samples, per_replica_sample_count = strategy.run(sample_and_clean, args=(dist, batch_size, seed_generator))
-                per_replica_samples_concat = tf.concat(strategy.experimental_local_results(per_replica_samples), axis=0)
-                samples = samples.write(i, per_replica_samples_concat)
-                i += 1
-                total_samples += strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_sample_count, axis=None)
-                #print(f"Generated {total_samples} samples")
-            except (RuntimeError, tf.errors.ResourceExhaustedError):
-                # If a RuntimeError or a ResourceExhaustedError occurs (possibly due to OOM), halve the batch size
-                batch_size = batch_size // 2
-                print(f"Warning: Batch size too large. Halving batch size to {batch_size} and retrying.")
-                if batch_size == 0:
-                    raise RuntimeError("Batch size is zero. Unable to generate samples.")
+    #with strategy.scope():
+    while total_samples < n_samples:
+        #try:
+        per_replica_samples, per_replica_sample_count = strategy.run(sample_and_clean, args=(dist, batch_size, seed_generator))
+        per_replica_samples_concat = tf.concat(strategy.experimental_local_results(per_replica_samples), axis=0)
+        samples = samples.write(i, per_replica_samples_concat)
+        i += 1
+        total_samples += strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_sample_count, axis=None)
+        #print(f"Generated {total_samples} samples")
+        #except (RuntimeError, tf.errors.ResourceExhaustedError):
+        #    # If a RuntimeError or a ResourceExhaustedError occurs (possibly due to OOM), halve the batch size
+        #    batch_size = batch_size // 2
+        #    print(f"Warning: Batch size too large. Halving batch size to {batch_size} and retrying.")
+        #    if batch_size == 0:
+        #        raise RuntimeError("Batch size is zero. Unable to generate samples.")
 
     samples = samples.concat()
     return samples[:n_samples] # type: ignore
@@ -450,12 +449,11 @@ def generate_and_clean_data_mirror_2(dist: tfp.distributions.Distribution,
                                      n_samples: int,
                                      batch_size: int, 
                                      dtype: DTypeType,
-                                     seed_generator: tf.random.Generator
+                                     seed_generator: tf.random.Generator,
+                                     strategy: tf.distribute.Strategy
                                     ) -> tf.Tensor:
     if dtype is None:
         dtype = tf.float32
-
-    strategy = tf.distribute.MirroredStrategy()
 
     # Calculate maximum number of iterations
     max_iterations = n_samples // batch_size + 1
@@ -487,18 +485,18 @@ def generate_and_clean_data_mirror_2(dist: tfp.distributions.Distribution,
     samples = tf.TensorArray(dtype, size=max_iterations)
     i = tf.constant(0, dtype=tf.int32)
 
-    with strategy.scope():
-        i, total_samples, samples, batch_size = tf.while_loop(
-            cond=loop_cond, 
-            body=loop_body, 
-            loop_vars=[i, total_samples, samples, batch_size],
-            shape_invariants=[
-                tf.TensorShape([]),
-                tf.TensorShape([]),
-                tf.TensorShape(None),
-                tf.TensorShape([])
-            ]
-        )
+    #with strategy.scope():
+    i, total_samples, samples, batch_size = tf.while_loop(
+        cond=loop_cond, 
+        body=loop_body, 
+        loop_vars=[i, total_samples, samples, batch_size],
+        shape_invariants=[
+            tf.TensorShape([]),
+            tf.TensorShape([]),
+            tf.TensorShape(None),
+            tf.TensorShape([])
+        ]
+    )
 
     samples = samples.concat()
     return samples[:n_samples]
@@ -511,18 +509,19 @@ def generate_and_clean_data(dist: tfp.distributions.Distribution,
                             batch_size: int, 
                             dtype: DTypeType,
                             seed_generator: tf.random.Generator,
-                            mirror_strategy: bool = False
+                            strategy: Optional[tf.distribute.Strategy] = None
                             ) -> tf.Tensor:
     if batch_size > n_samples:
         batch_size = n_samples
         #print("Warning: batch_size > n_samples. Setting batch_size = n_samples and proceeding.")
     #gpu_devices = tf.config.experimental.list_physical_devices('GPU')
-    if mirror_strategy:
+    if strategy:
         return generate_and_clean_data_mirror(dist = dist, 
                                               n_samples = n_samples, 
                                               batch_size = batch_size, 
                                               dtype = dtype, 
-                                              seed_generator = seed_generator)
+                                              seed_generator = seed_generator,
+                                              strategy = strategy)
     else:
         return generate_and_clean_data_simple(dist = dist, 
                                               n_samples = n_samples, 
