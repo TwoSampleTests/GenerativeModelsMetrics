@@ -351,22 +351,24 @@ class KPDMetric(TwoSampleTestBase):
                                    nsamples: int,
                                    seed_generator: tf.random.Generator
                                   ) -> tf.Tensor:
-            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = seed_generator, strategy = None) #self.Inputs.strategy) # type: ignore
+            dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = seed_generator, strategy = self.Inputs.strategy) # type: ignore
             return dist_num
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
 
         @tf.function
-        def batched_test_sub(dist_1_k_replica, dist_2_k_replica):
+        def batched_test_sub(dist_1_k_replica: tf.Tensor, 
+                             dist_2_k_replica: tf.Tensor
+                            ) -> DataTypeTF:
             def loop_body(idx):
                 # Operations to be performed on each GPU
-                vals = kpd_tf(dist_1_k_replica[idx, :, :], dist_2_k_replica[idx, :, :], **self.kpd_kwargs)
+                vals = kpd_tf(dist_1_k_replica[idx, :, :], dist_2_k_replica[idx, :, :], **self.kpd_kwargs) # type: ignore
                 vals = tf.cast(vals, dtype=dtype)
                 return vals
 
             # Using tf.vectorized_map to parallelize operations across the first dimension of the input tensor
-            vals_list = tf.vectorized_map(loop_body, tf.range(tf.shape(dist_1_k_replica)[0]))
+            vals_list: DataTypeTF = tf.vectorized_map(loop_body, tf.range(tf.shape(dist_1_k_replica)[0])) # type: ignore
             return vals_list
         
         @tf.function
@@ -376,27 +378,24 @@ class KPDMetric(TwoSampleTestBase):
                         ) -> DataTypeTF:
             # Define batched distributions
             dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end - start), seed_generator = seed_generator),
-                                               false_fn = lambda: return_dist_num(dist_1_num[start*batch_size:end*batch_size, :])) # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size * (end - start), seed_generator = seed_generator), # type: ignore
+                                               false_fn = lambda: return_dist_num(dist_1_num[start * batch_size : end * batch_size, :])) # type: ignore
             dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end - start), seed_generator = seed_generator),
-                                               false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size * (end - start), seed_generator = seed_generator), # type: ignore
+                                               false_fn = lambda: return_dist_num(dist_2_num[start * batch_size : end * batch_size, :])) # type: ignore
 
-            dist_1_k = tf.reshape(dist_1_k, (end - start, batch_size, ndims))
-            dist_2_k = tf.reshape(dist_2_k, (end - start, batch_size, ndims))
+            dist_1_k = tf.reshape(dist_1_k, (end - start, batch_size, ndims)) # type: ignore
+            dist_2_k = tf.reshape(dist_2_k, (end - start, batch_size, ndims)) # type: ignore
 
             #if self.Inputs.strategy:
             #    per_replica_results = self.Inputs.strategy.run(batched_test_sub, args=(dist_1_k, dist_2_k))
             #    vals_list: tf.Tensor = self.Inputs.strategy.reduce(tf.distribute.ReduceOp.SUM, per_replica_results, axis=None)
             #else:
-            vals_list = batched_test_sub(dist_1_k, dist_2_k)
+            #vals_list = batched_test_sub(dist_1_k, dist_2_k)
             
-            res: DataTypeTF = vals_list
-            #tf.print(f"vals shape: {vals_list.shape}")
-            #tf.print(f"batches shape: {batches_list.shape}")
-            #tf.print(f"res shape: {res.shape}")
+            vals_list: DataTypeTF = batched_test_sub(dist_1_k, dist_2_k) # type: ignore
     
-            return res
+            return vals_list
         
         def compute_test(seed_generator: tf.random.Generator,
                          max_vectorize: int = 100

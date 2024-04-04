@@ -413,6 +413,7 @@ class SKSTest(TwoSampleTestSlicedBase):
         --------
         None
         """
+        max_vectorize = int(max_vectorize)
         # Set alias for inputs
         if isinstance(self.Inputs.dist_1_num, np.ndarray):
             dist_1_num: tf.Tensor = tf.convert_to_tensor(self.Inputs.dist_1_num)
@@ -459,36 +460,44 @@ class SKSTest(TwoSampleTestSlicedBase):
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
         
-        #@tf.function(jit_compile=True, reduce_retracing=True)
-        def batched_test(start: tf.Tensor, 
-                         end: tf.Tensor
-                        ) -> DataTypeTF:
-            # Define batched distributions
-            dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)),
-                                               false_fn = lambda: return_dist_num(dist_1_num[start*batch_size:end*batch_size, :])) # type: ignore
-            dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)),
-                                               false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
-
-            dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims))
-            dist_2_k = tf.reshape(dist_2_k, (end-start, batch_size, ndims))
-
-            # Define the loop body to vectorize over ndims*chunk_size
+        @tf.function
+        def batched_test_sub(dist_1_k_replica: tf.Tensor, 
+                             dist_2_k_replica: tf.Tensor
+                            ) -> DataTypeTF:
             def loop_body(idx):
-                sks_mean, sks_std, sks_proj = sks_2samp_tf(dist_1_k[idx, :, :], dist_2_k[idx, :, :], directions_input = self.directions) # type: ignore
+                sks_mean, sks_std, sks_proj = sks_2samp_tf(dist_1_k_replica[idx, :, :], dist_2_k_replica[idx, :, :], directions_input = self.directions) # type: ignore
                 sks_mean = tf.cast(sks_mean, dtype = dtype)
                 sks_std = tf.cast(sks_std, dtype = dtype)
                 sks_proj = tf.cast(sks_proj, dtype = dtype)
                 return sks_mean, sks_std, sks_proj
 
             # Vectorize over ndims*chunk_size
-            sks_mean, sks_std, sks_proj = tf.vectorized_map(loop_body, tf.range(end-start)) # type: ignore
+            sks_mean, sks_std, sks_proj = tf.vectorized_map(loop_body, tf.range(tf.shape(dist_1_k_replica)[0])) # type: ignore
 
             sks_mean = tf.expand_dims(sks_mean, axis=1)
             sks_std = tf.expand_dims(sks_std, axis=1)
             
             res: DataTypeTF = tf.concat([sks_mean, sks_std, sks_proj], axis=1) # type: ignore
+
+            return res
+        
+        #@tf.function(jit_compile=True, reduce_retracing=True)
+        @tf.function
+        def batched_test(start: tf.Tensor, 
+                         end: tf.Tensor
+                        ) -> DataTypeTF:
+            # Define batched distributions
+            dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size * (end - start)), # type: ignore
+                                               false_fn = lambda: return_dist_num(dist_1_num[start * batch_size : end * batch_size, :])) # type: ignore
+            dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size * (end - start)), # type: ignore
+                                               false_fn = lambda: return_dist_num(dist_2_num[start * batch_size : end * batch_size, :])) # type: ignore
+
+            dist_1_k = tf.reshape(dist_1_k, (end - start, batch_size, ndims)) # type: ignore
+            dist_2_k = tf.reshape(dist_2_k, (end - start, batch_size, ndims)) # type: ignore
+
+            res: DataTypeTF = batched_test_sub(dist_1_k, dist_2_k) # type: ignore
 
             return res
             

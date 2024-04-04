@@ -389,29 +389,38 @@ class FNMetric(TwoSampleTestBase):
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
+        
+        @tf.function
+        def batched_test_sub(dist_1_k_replica: tf.Tensor, 
+                             dist_2_k_replica: tf.Tensor
+                            ) -> DataTypeTF:
+            # Define the loop body to vectorize over ndims*chunk_size
+            def loop_body(idx):
+                fron_norm = fn_2samp_tf(dist_1_k_replica[idx, :, :], dist_2_k_replica[idx, :, :]) # type: ignore
+                fron_norm = tf.cast(fron_norm, dtype=dtype)
+                return fron_norm
+
+            # Vectorize over ndims*chunk_size
+            frob_norm_list: DataTypeTF = tf.vectorized_map(loop_body, tf.range(tf.shape(dist_1_k_replica)[0])) # type: ignore
+
+            return frob_norm_list
             
         def batched_test(start: tf.Tensor, 
                          end: tf.Tensor
                         ) -> DataTypeTF:
             # Define batched distributions
             dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size * (end - start)), # type: ignore
                                                false_fn = lambda: return_dist_num(dist_1_num[start*batch_size:end*batch_size, :])) # type: ignore
             dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)),
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size * (end - start)), # type: ignore
                                                false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
 
-            dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims))
-            dist_2_k = tf.reshape(dist_2_k, (end-start, batch_size, ndims))
-
-            # Define the loop body to vectorize over ndims*chunk_size
-            def loop_body(idx):
-                fron_norm = fn_2samp_tf(dist_1_k[idx, :, :], dist_2_k[idx, :, :]) # type: ignore
-                fron_norm = tf.cast(fron_norm, dtype=dtype)
-                return fron_norm
+            dist_1_k = tf.reshape(dist_1_k, (end - start, batch_size, ndims)) # type: ignore
+            dist_2_k = tf.reshape(dist_2_k, (end - start, batch_size, ndims)) # type: ignore
 
             # Vectorize over ndims*chunk_size
-            frob_norm_list: DataTypeTF = tf.vectorized_map(loop_body, tf.range(end-start)) # type: ignore
+            frob_norm_list: DataTypeTF = batched_test_sub(dist_1_k, dist_2_k) # type: ignore
 
             return frob_norm_list
         

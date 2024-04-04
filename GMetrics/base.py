@@ -489,7 +489,7 @@ class TwoSampleTestInputs(object):
             self.__check_set_nsamples_np()
             
     def __check_set_small_sample_np(self) -> None:
-        if self.batch_size_test*self.niter*self.ndims <= self.small_sample_threshold or self.nsamples*self.ndims <= self.small_sample_threshold:
+        if self.batch_size_test * self.niter * self.ndims <= self.small_sample_threshold or self.nsamples * self.ndims <= self.small_sample_threshold:
             self._small_sample = True
         else:
             self._small_sample = False
@@ -498,10 +498,16 @@ class TwoSampleTestInputs(object):
         # Utility functions
         def set_small_sample(value: bool) -> None:
             self._small_sample = value
-        tf.cond(tf.logical_or(tf.less_equal(self.batch_size_test*self.niter*self.ndims, tf.constant(self.small_sample_threshold)), 
-                              tf.less_equal(self.nsamples*self.ndims, tf.constant(self.small_sample_threshold))),
+        #print(f"batch_size_test: {self.batch_size_test}")
+        #print(f"niter: {self.niter}")
+        #print(f"ndims: {self.ndims}")
+        #print(f"nsamples: {self.nsamples}")
+        #print(f"small_sample_threshold: {self.small_sample_threshold}")
+        tf.cond(tf.logical_or(tf.less_equal(self.batch_size_test * self.niter * self.ndims, self.small_sample_threshold), 
+                              tf.less_equal(self.nsamples * self.ndims, self.small_sample_threshold)),
                 true_fn = lambda: set_small_sample(True),
                 false_fn = lambda: set_small_sample(False))
+        #print(f"small_sample: {self.small_sample}")
         
     def __check_set_small_sample(self) -> None:
         if self.use_tf:

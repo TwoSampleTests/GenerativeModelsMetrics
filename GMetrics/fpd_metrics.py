@@ -445,24 +445,13 @@ class FPDMetric(TwoSampleTestBase):
         
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
-            
-        def batched_test(start: tf.Tensor, 
-                         end: tf.Tensor
-                        ) -> DataTypeTF:
-            # Define batched distributions
-            dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)),
-                                               false_fn = lambda: return_dist_num(dist_1_num[start*batch_size:end*batch_size, :])) # type: ignore
-            dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)),
-                                               false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
-
-            dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims))
-            dist_2_k = tf.reshape(dist_2_k, (end-start, batch_size, ndims))
-
-            # Define the loop body to vectorize over ndims*chunk_size
+        
+        @tf.function
+        def batched_test_sub(dist_1_k_replica: tf.Tensor, 
+                             dist_2_k_replica: tf.Tensor
+                            ) -> DataTypeTF:
             def loop_body(idx):
-                vals, batches = fpd_tf(dist_1_k[idx, :, :], dist_2_k[idx, :, :], **self.fpd_kwargs) # type: ignore
+                vals, batches = fpd_tf(dist_1_k_replica[idx, :, :], dist_2_k_replica[idx, :, :], **self.fpd_kwargs) # type: ignore
                 vals = tf.cast(vals, dtype=dtype)
                 batches = tf.cast(batches, dtype=dtype)
                 return vals, batches
@@ -470,12 +459,27 @@ class FPDMetric(TwoSampleTestBase):
             # Vectorize over ndims*chunk_size
             vals_list: tf.Tensor
             batches_list: tf.Tensor
-            vals_list, batches_list = tf.vectorized_map(loop_body, tf.range(end-start)) # type: ignore
+            vals_list, batches_list = tf.vectorized_map(loop_body, tf.range(tf.shape(dist_1_k_replica)[0])) # type: ignore
             
             res: DataTypeTF = tf.concat([vals_list, batches_list], axis=1) # type: ignore
-            #tf.print(f"vals shape: {vals_list.shape}")
-            #tf.print(f"batches shape: {batches_list.shape}")
-            #tf.print(f"res shape: {res.shape}")
+            return res
+        
+        @tf.function
+        def batched_test(start: tf.Tensor, 
+                         end: tf.Tensor
+                        ) -> DataTypeTF:
+            # Define batched distributions
+            dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size * (end - start)), # type: ignore
+                                               false_fn = lambda: return_dist_num(dist_1_num[start * batch_size : end * batch_size, :])) # type: ignore
+            dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size * (end - start)), # type: ignore
+                                               false_fn = lambda: return_dist_num(dist_2_num[start * batch_size : end * batch_size, :])) # type: ignore
+
+            dist_1_k = tf.reshape(dist_1_k, (end - start, batch_size, ndims)) # type: ignore
+            dist_2_k = tf.reshape(dist_2_k, (end - start, batch_size, ndims)) # type: ignore
+
+            res: DataTypeTF = batched_test_sub(dist_1_k, dist_2_k) # type: ignore
     
             return res
         

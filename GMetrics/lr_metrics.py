@@ -527,6 +527,8 @@ class LRMetric(TwoSampleTestBase):
             dist_num: tf.Tensor = generate_and_clean_data(dist, nsamples, self.Inputs.batch_size_gen, dtype = self.Inputs.dtype, seed_generator = self.Inputs.seed_generator, strategy = self.Inputs.strategy) # type: ignore
             return dist_num
         
+        #@tf.function(jit_compile=True, reduce_retracing=True)
+        @tf.function
         def get_logprobs(dist_1_num: DataTypeTF,
                          dist_2_num: DataTypeTF,
                          dist_1_symb: tfp.distributions.Distribution,
@@ -550,15 +552,43 @@ class LRMetric(TwoSampleTestBase):
             
             return logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered
         
+        @tf.function
+        def batched_test_sub(logprob_ref_ref: tf.Tensor, 
+                             logprob_ref_alt: tf.Tensor,
+                             logprob_alt_alt: tf.Tensor
+                            ) -> DataTypeTF:
+            def loop_body(idx):
+                logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm = lr_statistic_tf(logprob_ref_ref[idx, :], # type: ignore
+                                                                                                                           logprob_ref_alt[idx, :], # type: ignore
+                                                                                                                           logprob_alt_alt[idx, :]) # type: ignore
+                logprob_ref_ref_sum = tf.cast(logprob_ref_ref_sum, dtype = dtype)
+                logprob_ref_alt_sum = tf.cast(logprob_ref_alt_sum, dtype = dtype)
+                logprob_alt_alt_sum = tf.cast(logprob_alt_alt_sum, dtype = dtype)
+                lik_ratio = tf.cast(lik_ratio, dtype = dtype)
+                lik_ratio_norm = tf.cast(lik_ratio_norm, dtype = dtype)
+                return logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm
+
+            # Vectorize over ndims*chunk_size
+            logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm = tf.vectorized_map(loop_body, tf.range(tf.shape(logprob_ref_ref)[0])) # type: ignore
+
+            logprob_ref_ref_sum = tf.expand_dims(logprob_ref_ref_sum, axis=1)
+            logprob_ref_alt_sum = tf.expand_dims(logprob_ref_alt_sum, axis=1)
+            logprob_alt_alt_sum = tf.expand_dims(logprob_alt_alt_sum, axis=1)
+            lik_ratio = tf.expand_dims(lik_ratio, axis=1)
+            lik_ratio_norm = tf.expand_dims(lik_ratio_norm, axis=1)
+            
+            res: DataTypeTF = tf.concat([logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm], axis=1) # type: ignore
+            return res
+        
         def batched_test(start: tf.Tensor, 
                          end: tf.Tensor
                         ) -> DataTypeTF:
             # Define the loop body to vectorize over ndims*chunk_size
-            dist_1_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)) # type: ignore
+            dist_1_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size * (end - start)) # type: ignore
             if null:
-                dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)) # type: ignore
+                dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_1_symb, nsamples = batch_size * (end - start)) # type: ignore
             else:
-                dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)) # type: ignore
+                dist_2_k: DataTypeTF = set_dist_num_from_symb(dist_2_symb, nsamples = batch_size * (end - start)) # type: ignore
             
             # Compute log probabilities
             logprob_ref_ref_filtered: DataTypeTF
@@ -579,7 +609,6 @@ class LRMetric(TwoSampleTestBase):
                 iter += 1
                 num_missing: int = batch_size - n_finite
                 fraction: float = num_missing / batch_size
-                print(f"Warning: Removed a fraction {fraction} of samples due to non-finite log probabilities.")
                 
                 # Generate extra samples
                 dist_1_k_extra: DataTypeTF = tf.cast(set_dist_num_from_symb(dist_1_symb, nsamples = num_missing), dtype=dtype) # type: ignore
@@ -607,13 +636,15 @@ class LRMetric(TwoSampleTestBase):
                 # Count the number of finite samples
                 n_finite: tf.Tensor = tf.shape(logprob_ref_ref_filtered)[0]
                 
-            logprob_ref_ref_filtered = tf.expand_dims(logprob_ref_ref_filtered, axis=1)
-            logprob_ref_alt_filtered = tf.expand_dims(logprob_ref_alt_filtered, axis=1)
-            logprob_alt_alt_filtered = tf.expand_dims(logprob_alt_alt_filtered, axis=1)    
-                    
-            result_value: DataTypeTF = tf.concat([logprob_ref_ref_filtered, logprob_ref_alt_filtered, logprob_alt_alt_filtered], axis=1) # type: ignore
+            logprob_ref_ref_filtered_reshaped: tf.Tensor = tf.reshape(logprob_ref_ref_filtered, (end - start, batch_size)) # type: ignore
+            logprob_ref_alt_filtered_reshaped: tf.Tensor = tf.reshape(logprob_ref_alt_filtered, (end - start, batch_size)) # type: ignore
+            logprob_alt_alt_filtered_reshaped: tf.Tensor = tf.reshape(logprob_alt_alt_filtered, (end - start, batch_size)) # type: ignore
+
+            res: DataTypeTF = batched_test_sub(logprob_ref_ref_filtered_reshaped, 
+                                               logprob_ref_alt_filtered_reshaped, 
+                                               logprob_alt_alt_filtered_reshaped) # type: ignore
             
-            return result_value
+            return res
         
         #@tf.function(reduce_retracing=True)
         def compute_test(max_vectorize: int = 100) -> Tuple[DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF, DataTypeTF]:            
@@ -629,9 +660,11 @@ class LRMetric(TwoSampleTestBase):
             
             # Initialize the result TensorArray
             res: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
-            logprob_ref_ref: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
-            logprob_ref_alt: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
-            logprob_alt_alt: tf.TensorArray = tf.TensorArray(dtype, size = nchunks)
+            logprob_ref_ref_sum = tf.TensorArray(dtype, size = nchunks)
+            logprob_ref_alt_sum = tf.TensorArray(dtype, size = nchunks)
+            logprob_alt_alt_sum = tf.TensorArray(dtype, size = nchunks)
+            lik_ratio = tf.TensorArray(dtype, size = nchunks)
+            lik_ratio_norm = tf.TensorArray(dtype, size = nchunks)
             
             def body(i, res):
                 start = i * max_iter_per_chunk
@@ -645,37 +678,19 @@ class LRMetric(TwoSampleTestBase):
             
             for i in range(nchunks):
                 res_i = res.read(i)
-                logprob_ref_ref = logprob_ref_ref.write(i, res_i[:, 0])
-                logprob_ref_alt = logprob_ref_alt.write(i, res_i[:, 1])
-                logprob_alt_alt = logprob_alt_alt.write(i, res_i[:, 2])
+                logprob_ref_ref_sum = logprob_ref_ref_sum.write(i, res_i[:, 0])
+                logprob_ref_alt_sum = logprob_ref_alt_sum.write(i, res_i[:, 1])
+                logprob_alt_alt_sum = logprob_alt_alt_sum.write(i, res_i[:, 2])
+                lik_ratio = lik_ratio.write(i, res_i[:, 3])
+                lik_ratio_norm = lik_ratio_norm.write(i, res_i[:, 4])
                 
-            logprob_ref_ref_stacked: DataTypeTF = tf.reshape(logprob_ref_ref.stack(), (niter,-1))
-            logprob_ref_alt_stacked: DataTypeTF = tf.reshape(logprob_ref_alt.stack(), (niter,-1))
-            logprob_alt_alt_stacked: DataTypeTF = tf.reshape(logprob_alt_alt.stack(), (niter,-1))
-            
-            logprob_ref_ref_sum_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
-            logprob_ref_alt_sum_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
-            logprob_alt_alt_sum_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
-            lik_ratio_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
-            lik_ratio_norm_list: tf.TensorArray = tf.TensorArray(dtype, size = niter)
-            
-            for i in range(niter):
-                logprob_ref_ref_sum, logprob_ref_alt_sum, logprob_alt_alt_sum, lik_ratio, lik_ratio_norm = lr_statistic_tf(logprob_ref_ref_stacked[i], # type: ignore 
-                                                                                                                           logprob_ref_alt_stacked[i], 
-                                                                                                                           logprob_alt_alt_stacked[i])
-                logprob_ref_ref_sum_list = logprob_ref_ref_sum_list.write(i, logprob_ref_ref_sum)
-                logprob_ref_alt_sum_list = logprob_ref_alt_sum_list.write(i, logprob_ref_alt_sum)
-                logprob_alt_alt_sum_list = logprob_alt_alt_sum_list.write(i, logprob_alt_alt_sum)
-                lik_ratio_list = lik_ratio_list.write(i, lik_ratio)
-                lik_ratio_norm_list = lik_ratio_norm_list.write(i, lik_ratio_norm)
-            
-            logprob_ref_ref_sum_out: DataTypeTF  = tf.reshape(logprob_ref_ref_sum_list.stack(), (niter,))
-            logprob_ref_alt_sum_out: DataTypeTF = tf.reshape(logprob_ref_alt_sum_list.stack(), (niter,))
-            logprob_alt_alt_sum_out: DataTypeTF = tf.reshape(logprob_alt_alt_sum_list.stack(), (niter,))
-            lik_ratio_out: DataTypeTF = tf.reshape(lik_ratio_list.stack(), (niter,))
-            lik_ratio_norm_out: DataTypeTF = tf.reshape(lik_ratio_norm_list.stack(), (niter,))
+            logprob_ref_ref_sum_stacked: DataTypeTF = tf.reshape(logprob_ref_ref_sum.stack(), [-1])
+            logprob_ref_alt_sum_stacked: DataTypeTF = tf.reshape(logprob_ref_alt_sum.stack(), [-1])
+            logprob_alt_alt_sum_stacked: DataTypeTF = tf.reshape(logprob_alt_alt_sum.stack(), [-1])
+            lik_ratio_stacked: DataTypeTF = tf.reshape(lik_ratio.stack(), [-1])
+            lik_ratio_norm_stacked: DataTypeTF = tf.reshape(lik_ratio_norm.stack(), [-1])
         
-            return logprob_ref_ref_sum_out, logprob_ref_alt_sum_out, logprob_alt_alt_sum_out, lik_ratio_out, lik_ratio_norm_out
+            return logprob_ref_ref_sum_stacked, logprob_ref_alt_sum_stacked, logprob_alt_alt_sum_stacked, lik_ratio_stacked, lik_ratio_norm_stacked
 
         start_calculation()
         

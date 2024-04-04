@@ -625,39 +625,28 @@ class KSTest(TwoSampleTestBase):
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
         
-        def batched_test(start: tf.Tensor, 
-                         end: tf.Tensor
-                        ) -> DataTypeTF:
-            # Define batched distributions
-            dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size*(end-start)),
-                                               false_fn = lambda: return_dist_num(dist_1_num[start*batch_size:end*batch_size, :])) # type: ignore
-            dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
-                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size*(end-start)),
-                                               false_fn = lambda: return_dist_num(dist_2_num[start*batch_size:end*batch_size, :])) # type: ignore
-
-            dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims))
-            dist_2_k = tf.reshape(dist_2_k, (end-start, batch_size, ndims))
-                
-            # Define the loop body function
+        @tf.function
+        def batched_test_sub(dist_1_k_replica: tf.Tensor, 
+                             dist_2_k_replica: tf.Tensor
+                            ) -> DataTypeTF:
             def loop_body(args):
                 idx1 = args[0]
                 idx2 = args[1]
-                metric, pvalue, _, _ = ks_2samp_tf(dist_1_k[idx1, :, idx2], dist_2_k[idx1, :, idx2], verbose=False) # type: ignore
+                metric, pvalue, _, _ = ks_2samp_tf(dist_1_k_replica[idx1, :, idx2], dist_2_k_replica[idx1, :, idx2], verbose=False) # type: ignore
                 metric = tf.cast(metric, dtype=dtype)
                 pvalue = tf.cast(pvalue, dtype=dtype)
                 return metric, pvalue
             
             # Create the range of indices for both loops
-            indices = tf.stack(tf.meshgrid(tf.range(end-start), tf.range(ndims), indexing='ij'), axis=-1)
+            indices = tf.stack(tf.meshgrid(tf.range(tf.shape(dist_1_k_replica)[0]), tf.range(tf.shape(dist_1_k_replica)[2]), indexing='ij'), axis=-1) # type: ignore
             indices = tf.reshape(indices, [-1, 2])
             
             # Use tf.vectorized_map to iterate over the indices
             statistic_lists, pvalue_lists = tf.vectorized_map(loop_body, indices) # type: ignore
             
             # Reshape the results back to (chunk_size, ndims)
-            statistic_lists = tf.reshape(statistic_lists, (end-start, ndims))
-            pvalue_lists = tf.reshape(pvalue_lists, (end-start, ndims))
+            statistic_lists = tf.reshape(statistic_lists, (tf.shape(dist_1_k_replica)[0], tf.shape(dist_1_k_replica)[2])) # type: ignore
+            pvalue_lists = tf.reshape(pvalue_lists, (tf.shape(dist_1_k_replica)[0], tf.shape(dist_1_k_replica)[2])) # type: ignore
 
             # Compute the mean values
             statistic_means = tf.cast(tf.reduce_mean(statistic_lists, axis=1), dtype=dtype)
@@ -671,6 +660,24 @@ class KSTest(TwoSampleTestBase):
             pvalue_stds = tf.expand_dims(pvalue_stds, axis=1)
             
             res: DataTypeTF = tf.concat([statistic_means, statistic_stds, statistic_lists, pvalue_means, pvalue_stds, pvalue_lists], axis=1) # type: ignore
+            return res
+        
+        @tf.function
+        def batched_test(start: tf.Tensor, 
+                         end: tf.Tensor
+                        ) -> DataTypeTF:
+            # Define batched distributions
+            dist_1_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_1_symb, nsamples = batch_size * (end - start)), # type: ignore
+                                               false_fn = lambda: return_dist_num(dist_1_num[start * batch_size : end * batch_size, :])) # type: ignore
+            dist_2_k: tf.Tensor = tf.cond(tf.equal(tf.shape(dist_1_num[0])[0],0), # type: ignore
+                                               true_fn = lambda: set_dist_num_from_symb(dist_2_symb, nsamples = batch_size * (end - start)), # type: ignore
+                                               false_fn = lambda: return_dist_num(dist_2_num[start * batch_size : end * batch_size, :])) # type: ignore
+
+            dist_1_k = tf.reshape(dist_1_k, (end-start, batch_size, ndims)) # type: ignore
+            dist_2_k = tf.reshape(dist_2_k, (end-start, batch_size, ndims)) # type: ignore
+            
+            res: DataTypeTF = batched_test_sub(dist_1_k, dist_2_k) # type: ignore
         
             return res
 
