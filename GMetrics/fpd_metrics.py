@@ -110,9 +110,9 @@ def _normalise_features_tf(data1_input: DataType,
 @tf.function(jit_compile = False, reduce_retracing = True)
 def fpd_tf(data1_input: DataType, 
            data2_input: DataType,
-           min_samples: int = 20_000, 
-           max_samples: int = 50_000, 
-           num_batches: int = 20, 
+           min_samples_input: Optional[int] = None, 
+           max_samples_input: Optional[int] = None,
+           num_batches: int = 1, 
            num_points: int = 10,
            normalise: bool = True,
            seed: int = 0
@@ -122,8 +122,15 @@ def fpd_tf(data1_input: DataType,
     if normalise:
         data1, data2 = _normalise_features_tf(data1_input, data2_input) # type: ignore
     else:
-        data1 = tf.convert_to_tensor(data1_input)
-        data2 = tf.convert_to_tensor(data2_input)
+        data1 = tf.convert_to_tensor(data1_input) # type: ignore
+        data2 = tf.convert_to_tensor(data2_input) # type: ignore
+    num_points = int(num_points)
+    
+    l1: int = len(data1)
+    l2: int = len(data2)
+    
+    min_samples: int = min_samples_input if min_samples_input is not None else int(min(l1, l2) / 3)
+    max_samples: int = max_samples_input if max_samples_input is not None else int(min(l1, l2))
 
     if len(data1.shape) == 1: # type: ignore
         data1 = tf.expand_dims(data1, axis=-1)
@@ -172,6 +179,10 @@ def fpd_tf(data1_input: DataType,
 def fpd_tf_fit(vals_list_input: DataType, 
                batches_list_input: tf.Tensor
               ) -> Tuple[DataTypeNP, DataTypeNP]:
+    if len(tf.shape(vals_list_input)) == 1:
+        vals_list_input = tf.expand_dims(vals_list_input, axis=0)
+    if len(tf.shape(batches_list_input)) == 1:
+        batches_list_input = tf.expand_dims(batches_list_input, axis=0)
     vals_list: DataTypeNP = np.array(vals_list_input)
     batches_list: DataTypeNP = np.array(batches_list_input)
     metric_list: list = []
@@ -224,7 +235,7 @@ class FPDMetric(TwoSampleTestBase):
     
     @fpd_kwargs.setter
     def fpd_kwargs(self, fpd_kwargs: Dict[str, Any]) -> None:
-        valid_keys: Set[str] = {'min_samples', 'max_samples', 'num_batches', 'num_points', 'normalise', 'seed'}
+        valid_keys: Set[str] = {'min_samples_input', 'max_samples_input', 'num_batches', 'num_points', 'normalise', 'seed'}
         # Dynamically get valid keys from `fpd` function's parameters
         # valid_keys = set(inspect.signature(JMetrics.fpd).parameters.keys())
         
