@@ -112,7 +112,7 @@ def fpd_tf(data1_input: DataType,
            data2_input: DataType,
            min_samples_input: Optional[int] = None, 
            max_samples_input: Optional[int] = None,
-           num_batches: int = 1, 
+           num_batches: int = 20, 
            num_points: int = 10,
            normalise: bool = True,
            seed: int = 0

@@ -720,7 +720,10 @@ def compute_exclusion_adaptive_bisection(metric_config: Dict[str,Any],
             print(f"statistic = {metric} - next threshold = {metric_thresholds[metric_threshold_number][2]} at {metric_thresholds[metric_threshold_number][0]} CL")
 
         relative_error_eps = 2 * (eps_max - eps_min) / (eps_max + eps_min)
-        relative_error_metric = 2 * (metric_thresholds[metric_threshold_number][2] - metric) / (metric_thresholds[metric_threshold_number][2] + metric)
+        relative_error_metric = 2 * np.abs(metric_thresholds[metric_threshold_number][2] - metric) / (metric_thresholds[metric_threshold_number][2] + metric)
+        if verbose:
+            print(f"relative_error_eps = {relative_error_eps}")
+            print(f"relative_error_metric = {relative_error_metric}")
 
         if division_factor / reduce_division_factor <= 1 / 2.:
             division_factor = 1 / 2.
@@ -892,6 +895,7 @@ def compute_exclusion_bisection(metric_config: Dict[str,Any],
             #direction = -1
             eps_max = eps  # Update the maximum bound
             eps = eps_max - (eps_max - eps_min) / 2.
+        else:
             #direction = 1
             eps_min = eps  # Update the minimum bound
             eps = eps_min + (eps_max - eps_min) / 2.
@@ -900,7 +904,10 @@ def compute_exclusion_bisection(metric_config: Dict[str,Any],
             print(f"statistic = {metric} - next threshold = {metric_thresholds[metric_threshold_number][2]} at {metric_thresholds[metric_threshold_number][0]} CL")
 
         relative_error_eps = 2 * (eps_max - eps_min) / (eps_max + eps_min)
-        relative_error_metric = 2 * (metric_thresholds[metric_threshold_number][2] - metric) / (metric_thresholds[metric_threshold_number][2] + metric)            
+        relative_error_metric = 2 * np.abs(metric_thresholds[metric_threshold_number][2] - metric) / (metric_thresholds[metric_threshold_number][2] + metric)
+        if verbose:
+            print(f"relative_error_eps = {relative_error_eps}")
+            print(f"relative_error_metric = {relative_error_metric}")
         
         # Check if the fn value is within the required accuracy of the threshold
         if relative_error_eps < x_tol and relative_error_metric < fn_tol:
@@ -1012,6 +1019,7 @@ def compute_exclusion_LR_adaptive_bisection(metric_config: Dict[str,Any],
     metric_scale_func = metric_config["scale_func"]
     max_vectorize = metric_config["max_vectorize"]
     null_file_base = metric_config["null_file"]
+    metrics_config_file = model_dir + "metrics_config.json"
     
     # Define ncomp and ndims
     ncomp = metric_config["test_config"]["ncomp"]
@@ -1080,7 +1088,8 @@ def compute_exclusion_LR_adaptive_bisection(metric_config: Dict[str,Any],
                               np.sort(dist_null)[int(len(dist_null)*cl)]] for cl in cl_list]
         print(f"ThresholdS: {metric_thresholds}")
         metric_config["thresholds"].append([eps, deformation, metric_thresholds])
-        GMetrics.utils.save_update_metrics_config(metrics_config = metrics_config, metrics_config_file = metrics_config_file) # type: ignore
+        save_update_metrics_config(metrics_config = metric_config, 
+                                   metrics_config_file = metrics_config_file) # type: ignore
         end_null = timer()
         print(f"Null distribution computed in {end_null - start_null} seconds")
         
@@ -1110,6 +1119,9 @@ def compute_exclusion_LR_adaptive_bisection(metric_config: Dict[str,Any],
 
         relative_error_eps = 2 * (eps_max - eps_min) / (eps_max + eps_min)
         relative_error_metric = 2 * np.abs(metric_thresholds[metric_threshold_number][2] - metric) / (metric_thresholds[metric_threshold_number][2] + metric)
+        if verbose:
+            print(f"relative_error_eps = {relative_error_eps}")
+            print(f"relative_error_metric = {relative_error_metric}")
 
         if division_factor / reduce_division_factor <= 1 / 2.:
             division_factor = 1 / 2.
@@ -1231,6 +1243,7 @@ def compute_exclusion_LR_bisection(metric_config: Dict[str,Any],
     metric_scale_func = metric_config["scale_func"]
     max_vectorize = metric_config["max_vectorize"]
     null_file_base = metric_config["null_file"]
+    metrics_config_file = model_dir + "metrics_config.json"
     
     # Define ncomp and ndims
     ncomp = metric_config["test_config"]["ncomp"]
@@ -1294,7 +1307,8 @@ def compute_exclusion_LR_bisection(metric_config: Dict[str,Any],
                               np.sort(dist_null)[int(len(dist_null)*cl)]] for cl in cl_list]
         print(f"ThresholdS: {metric_thresholds}")
         metric_config["thresholds"].append([eps, deformation, metric_thresholds])
-        GMetrics.utils.save_update_metrics_config(metrics_config = metrics_config, metrics_config_file = metrics_config_file) # type: ignore
+        save_update_metrics_config(metrics_config = metric_config, 
+                                   metrics_config_file = metrics_config_file) # type: ignore
         end_null = timer()
         print(f"Null distribution computed in {end_null - start_null} seconds")
         
@@ -1324,6 +1338,9 @@ def compute_exclusion_LR_bisection(metric_config: Dict[str,Any],
 
         relative_error_eps = 2 * (eps_max - eps_min) / (eps_max + eps_min)
         relative_error_metric = 2 * np.abs(metric_thresholds[metric_threshold_number][2] - metric) / (metric_thresholds[metric_threshold_number][2] + metric)
+        if verbose:
+            print(f"relative_error_eps = {relative_error_eps}")
+            print(f"relative_error_metric = {relative_error_metric}")
          
         # Check if the fn value is within the required accuracy of the threshold
         if relative_error_eps < x_tol and relative_error_metric < fn_tol:

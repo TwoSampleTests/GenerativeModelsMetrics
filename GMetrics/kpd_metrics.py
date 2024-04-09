@@ -48,6 +48,35 @@ def _poly_kernel_pairwise_tf(X, Y, degree):
     gamma = tf.cast(1.0, X.dtype) / tf.cast(tf.shape(X)[-1], X.dtype)
     return tf.pow(tf.linalg.matmul(X, Y, transpose_b=True) * gamma + 1.0, degree)
 
+#def compute_block_kernel(X_block, Y, degree, gamma):
+#    """Compute the polynomial kernel for a block of X against all Y."""
+#    return tf.pow(tf.linalg.matmul(X_block, Y, transpose_b=True) * gamma + 1.0, degree)
+#
+#@tf.function(jit_compile=True)
+#def _poly_kernel_pairwise_tf(X, Y, degree, block_size=5000):
+#    gamma = tf.cast(1.0, X.dtype) / tf.cast(tf.shape(X)[-1], X.dtype)
+#    X_rows = tf.shape(X)[0]
+#    # Ensure division is performed with floating point to avoid truncation
+#    num_blocks = tf.math.ceil(tf.cast(X_rows, tf.float32) / tf.cast(block_size, tf.float32))
+#    # Cast the result to integer as TensorArray size expects an int
+#    num_blocks = tf.cast(num_blocks, tf.int32)
+#
+#    results = tf.TensorArray(dtype=X.dtype, size=num_blocks, dynamic_size=False)
+#
+#    for i in tf.range(0, X_rows, block_size):
+#        start_idx = i
+#        end_idx = tf.minimum(i + block_size, X_rows)
+#        X_block = X[start_idx:end_idx]
+#        # Compute the block kernel
+#        block_kernel = tf.pow(tf.linalg.matmul(X_block, Y, transpose_b=True) * gamma + 1.0, degree)
+#        # Write each result to the TensorArray
+#        results = results.write(i // block_size, block_kernel)
+#
+#    # Concatenate results into a single tensor
+#    full_kernel = results.concat()
+#
+#    return full_kernel
+
 @tf.function(jit_compile=True, reduce_retracing = True)
 def _mmd_quadratic_unbiased_tf(XX, YY, XY):
     m = tf.cast(tf.shape(XX)[0], XX.dtype)
@@ -66,8 +95,8 @@ def _mmd_poly_quadratic_unbiased_tf(X, Y, degree=4):
 @tf.function(jit_compile=True, reduce_retracing = True)
 def kpd_tf(X: tf.Tensor,
            Y: tf.Tensor,
-           num_batches: int = 10,
-           batch_size: int = 5000,
+           num_batches: int = 1,
+           batch_size: int = 10_000,
            normalise: bool = True,
            seed: int = 42):
     if normalise:
@@ -97,17 +126,18 @@ def kpd_tf_output(vals_points_input: DataTypeTF) -> DataTypeTF:
     metric_error_list: list = []
     if len(vals_points.shape) == 1:
         metric_list.append(np.median(vals_points))
-        metric_error_list.append(iqr(vals_points, rng=(16.275, 83.725)) / 2)
-        #metric_error_list.append(None)
+        try:
+            metric_error_list.append(iqr(vals_points, rng=(16.275, 83.725)) / 2)
+        except:
+            metric_error_list.append(None)
     else:
         for vals_point in vals_points:
             metric_list.append(np.median(vals_point))
-            metric_error_list.append(iqr(vals_point, rng=(16.275, 83.725)) / 2)
-            #metric_error_list.append(None)
+            try:
+                metric_error_list.append(iqr(vals_point, rng=(16.275, 83.725)) / 2)
+            except:
+                metric_error_list.append(None)
     return np.array(metric_list), np.array(metric_error_list)
-        
-    # Calculating median and IQR using TensorFlow
-    return 
            
 
 class KPDMetric(TwoSampleTestBase):
