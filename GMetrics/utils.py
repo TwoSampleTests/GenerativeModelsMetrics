@@ -593,7 +593,34 @@ def save_update_metrics_config(metrics_config: Dict[str,Any],
     with open(metrics_config_file, "w") as file:
         json.dump(existing_data, file, cls=CustomEncoder, indent=4)
         
-    dict_values_list = [x.values() for x in metrics_config.values()]
+    dict_values_list = [x.values() for x in existing_data.values()]
+    flat_list_of_dicts = [item for sublist in dict_values_list for item in sublist]
+    
+    return pd.DataFrame(flat_list_of_dicts)
+
+def save_update_LR_metrics_config(metric_config: Dict[str,Any],
+                                  metrics_config_file: str
+                                 ) -> pd.DataFrame:
+    # Step 1: Read the existing content if the file exists
+    existing_data = {}
+    if os.path.exists(metrics_config_file):
+        try:
+            with open(metrics_config_file, "r") as file:
+                existing_data = json.load(file)
+        except json.JSONDecodeError:
+            # File is empty or corrupted, start with an empty dictionary
+            existing_data = {}
+
+    unique_key = list(existing_data.keys())[0]
+    # Step 2: Update the dictionary with new results
+    existing_data[unique_key]["lr"] = metric_config
+
+    # Step 3: Write the updated dictionary back to the file
+    # Use this custom encoder when dumping your JSON data
+    with open(metrics_config_file, "w") as file:
+        json.dump(existing_data, file, cls=CustomEncoder, indent=4)
+        
+    dict_values_list = [x.values() for x in existing_data.values()]
     flat_list_of_dicts = [item for sublist in dict_values_list for item in sublist]
     
     return pd.DataFrame(flat_list_of_dicts)
@@ -1088,8 +1115,8 @@ def compute_exclusion_LR_adaptive_bisection(metric_config: Dict[str,Any],
                               np.sort(dist_null)[int(len(dist_null)*cl)]] for cl in cl_list]
         print(f"ThresholdS: {metric_thresholds}")
         metric_config["thresholds"].append([eps, deformation, metric_thresholds])
-        save_update_metrics_config(metrics_config = metric_config, 
-                                   metrics_config_file = metrics_config_file) # type: ignore
+        save_update_LR_metrics_config(metric_config = metric_config, 
+                                      metrics_config_file = metrics_config_file) # type: ignore
         end_null = timer()
         print(f"Null distribution computed in {end_null - start_null} seconds")
         
@@ -1307,8 +1334,8 @@ def compute_exclusion_LR_bisection(metric_config: Dict[str,Any],
                               np.sort(dist_null)[int(len(dist_null)*cl)]] for cl in cl_list]
         print(f"ThresholdS: {metric_thresholds}")
         metric_config["thresholds"].append([eps, deformation, metric_thresholds])
-        save_update_metrics_config(metrics_config = metric_config, 
-                                   metrics_config_file = metrics_config_file) # type: ignore
+        save_update_LR_metrics_config(metric_config = metric_config, 
+                                      metrics_config_file = metrics_config_file) # type: ignore
         end_null = timer()
         print(f"Null distribution computed in {end_null - start_null} seconds")
         
