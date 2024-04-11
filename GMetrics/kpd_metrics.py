@@ -48,35 +48,6 @@ def _poly_kernel_pairwise_tf(X, Y, degree):
     gamma = tf.cast(1.0, X.dtype) / tf.cast(tf.shape(X)[-1], X.dtype)
     return tf.pow(tf.linalg.matmul(X, Y, transpose_b=True) * gamma + 1.0, degree)
 
-#def compute_block_kernel(X_block, Y, degree, gamma):
-#    """Compute the polynomial kernel for a block of X against all Y."""
-#    return tf.pow(tf.linalg.matmul(X_block, Y, transpose_b=True) * gamma + 1.0, degree)
-#
-#@tf.function(jit_compile=True)
-#def _poly_kernel_pairwise_tf(X, Y, degree, block_size=5000):
-#    gamma = tf.cast(1.0, X.dtype) / tf.cast(tf.shape(X)[-1], X.dtype)
-#    X_rows = tf.shape(X)[0]
-#    # Ensure division is performed with floating point to avoid truncation
-#    num_blocks = tf.math.ceil(tf.cast(X_rows, tf.float32) / tf.cast(block_size, tf.float32))
-#    # Cast the result to integer as TensorArray size expects an int
-#    num_blocks = tf.cast(num_blocks, tf.int32)
-#
-#    results = tf.TensorArray(dtype=X.dtype, size=num_blocks, dynamic_size=False)
-#
-#    for i in tf.range(0, X_rows, block_size):
-#        start_idx = i
-#        end_idx = tf.minimum(i + block_size, X_rows)
-#        X_block = X[start_idx:end_idx]
-#        # Compute the block kernel
-#        block_kernel = tf.pow(tf.linalg.matmul(X_block, Y, transpose_b=True) * gamma + 1.0, degree)
-#        # Write each result to the TensorArray
-#        results = results.write(i // block_size, block_kernel)
-#
-#    # Concatenate results into a single tensor
-#    full_kernel = results.concat()
-#
-#    return full_kernel
-
 @tf.function(jit_compile=True, reduce_retracing = True)
 def _mmd_quadratic_unbiased_tf(XX, YY, XY):
     m = tf.cast(tf.shape(XX)[0], XX.dtype)
@@ -92,9 +63,42 @@ def _mmd_poly_quadratic_unbiased_tf(X, Y, degree=4):
     XY = _poly_kernel_pairwise_tf(X, Y, degree=degree)
     return _mmd_quadratic_unbiased_tf(XX, YY, XY)
 
+@tf.function(reduce_retracing = True)
+def _blockwize_mmd_poly_quadratic_unbiased_tf(X, Y, degree=4, block_size=10_000):
+    block_size = tf.cast(block_size, tf.int32)
+    num_samples_X = tf.shape(X)[0]
+    num_samples_Y = tf.shape(Y)[0]
+    num_blocks_X = tf.math.ceil(tf.cast(num_samples_X, tf.float32) / tf.cast(block_size, tf.float32))
+    num_blocks_X = tf.cast(num_blocks_X, tf.int32)
+    num_blocks_Y = tf.math.ceil(tf.cast(num_samples_Y, tf.float32) / tf.cast(block_size, tf.float32))
+    num_blocks_Y = tf.cast(num_blocks_Y, tf.int32)
+    mmd_result = tf.constant(0.0, dtype=X.dtype)
+    
+    for i in tf.range(num_blocks_X):
+        i = tf.cast(i, tf.int32)
+        start_i = i * block_size
+        end_i = tf.minimum(start_i + block_size, num_samples_X)
+        X_block = X[start_i:end_i]
+        XX_block = _poly_kernel_pairwise_tf(X_block, X_block, degree)
+
+        for j in tf.range(num_blocks_Y):
+            print(f"Computing ({i},{j}) component")
+            start_j = j * block_size
+            end_j = tf.minimum(start_j + block_size, num_samples_Y)
+            Y_block = Y[start_j:end_j]
+            YY_block = _poly_kernel_pairwise_tf(Y_block, Y_block, degree)
+            XY_block = _poly_kernel_pairwise_tf(X_block, Y_block, degree)
+            block_mmd = _mmd_quadratic_unbiased_tf(XX_block, YY_block, XY_block)
+            mmd_result += block_mmd
+            
+    mmd_result = mmd_result / (tf.cast(num_blocks_X * num_blocks_Y, mmd_result.dtype))
+    return mmd_result
+
 @tf.function(jit_compile=True, reduce_retracing = True)
 def kpd_tf(X: tf.Tensor,
            Y: tf.Tensor,
+           degree: int = 4,
+           block_size: int = 10_000,
            num_batches: int = 1,
            batch_size: int = 10_000,
            normalise: bool = True,
@@ -114,7 +118,7 @@ def kpd_tf(X: tf.Tensor,
         rand_sample1 = tf.gather(X, rand1)
         rand_sample2 = tf.gather(Y, rand2)
 
-        val = _mmd_poly_quadratic_unbiased_tf(rand_sample1, rand_sample2)
+        val = _blockwize_mmd_poly_quadratic_unbiased_tf(rand_sample1, rand_sample2, degree, block_size)
         vals_point.append(val)
     
     vals_point = tf.stack(vals_point)
@@ -171,13 +175,19 @@ class KPDMetric(TwoSampleTestBase):
     
     @kpd_kwargs.setter
     def kpd_kwargs(self, kpd_kwargs: Dict[str, Any]) -> None:
-        valid_keys: Set[str] = {'num_batches', 'batch_size', 'normalise', 'seed'}
+        valid_keys: Set[str] = {'degree', 'block_size', 'num_batches', 'batch_size', 'normalise', 'seed'}
         # Dynamically get valid keys from `kpd` function's parameters
         # valid_keys = set(inspect.signature(JMetrics.kpd).parameters.keys())
         
         for key in kpd_kwargs.keys():
             if key not in valid_keys:
                 raise ValueError(f"Invalid key: {key}. Valid keys are {valid_keys}")
+            
+        if 'degree' in kpd_kwargs and not isinstance(kpd_kwargs['degree'], int):
+            raise ValueError("degree must be an integer")
+        
+        if 'block_size' in kpd_kwargs and not isinstance(kpd_kwargs['block_size'], int):
+            raise ValueError("block_size must be an integer")
 
         if 'num_batches' in kpd_kwargs and not isinstance(kpd_kwargs['num_batches'], int):
             raise ValueError("num_batches must be an integer")
