@@ -63,7 +63,7 @@ def _mmd_poly_quadratic_unbiased_tf(X, Y, degree=4):
     XY = _poly_kernel_pairwise_tf(X, Y, degree=degree)
     return _mmd_quadratic_unbiased_tf(XX, YY, XY)
 
-@tf.function(reduce_retracing = True)
+@tf.function
 def _blockwize_mmd_poly_quadratic_unbiased_tf(X, Y, degree=4, block_size=10_000):
     block_size = tf.cast(block_size, tf.int32)
     num_samples_X = tf.shape(X)[0]
@@ -94,7 +94,7 @@ def _blockwize_mmd_poly_quadratic_unbiased_tf(X, Y, degree=4, block_size=10_000)
     mmd_result = mmd_result / (tf.cast(num_blocks_X * num_blocks_Y, mmd_result.dtype))
     return mmd_result
 
-@tf.function(jit_compile=True, reduce_retracing = True)
+#@tf.function(jit_compile=True, reduce_retracing = True)
 def kpd_tf(X: tf.Tensor,
            Y: tf.Tensor,
            degree: int = 4,
@@ -112,8 +112,8 @@ def kpd_tf(X: tf.Tensor,
     vals_point = []
     for i in range(num_batches):
         tf.random.set_seed(seed + i * 1000)
-        rand1 = tf.random.uniform(shape=(batch_size,), minval=0, maxval=len(X), dtype=tf.int32)
-        rand2 = tf.random.uniform(shape=(batch_size,), minval=0, maxval=len(Y), dtype=tf.int32)
+        rand1 = tf.random.uniform(shape=(batch_size,), minval=0, maxval=tf.size(X), dtype=tf.int32)
+        rand2 = tf.random.uniform(shape=(batch_size,), minval=0, maxval=tf.size(Y), dtype=tf.int32)
         
         rand_sample1 = tf.gather(X, rand1)
         rand_sample2 = tf.gather(Y, rand2)
@@ -397,7 +397,7 @@ class KPDMetric(TwoSampleTestBase):
         def return_dist_num(dist_num: tf.Tensor) -> tf.Tensor:
             return dist_num
 
-        @tf.function
+        #@tf.function
         def batched_test_sub(dist_1_k_replica: tf.Tensor, 
                              dist_2_k_replica: tf.Tensor
                             ) -> DataTypeTF:
@@ -411,7 +411,7 @@ class KPDMetric(TwoSampleTestBase):
             vals_list: DataTypeTF = tf.vectorized_map(loop_body, tf.range(tf.shape(dist_1_k_replica)[0])) # type: ignore
             return vals_list
         
-        @tf.function
+        #@tf.function
         def batched_test(start: tf.Tensor, 
                          end: tf.Tensor,
                          seed_generator: tf.random.Generator
