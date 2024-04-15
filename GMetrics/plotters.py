@@ -1,6 +1,7 @@
 
 import os
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 import tensorflow_probability as tfp
 import numpy as np
@@ -66,7 +67,8 @@ def cornerplotter(dist_1,
                   max_dim = 32, 
                   n_bins = 50,
                   show = False,
-                  save = True):
+                  save = True
+                 ) -> None:
     try:
         tf.random.set_seed(0)
         np.random.seed(0)
@@ -128,7 +130,6 @@ def cornerplotter(dist_1,
         plt.show()
     plt.close()
     return
-
 
 def marginal_plot(target_test_data,sample_nf,path_to_plots,ndims):
 
@@ -199,5 +200,65 @@ def marginal_plot(target_test_data,sample_nf,path_to_plots,ndims):
     fig.clf()
 
     return
+   
+def plot_corr_matrix(dist: np.ndarray,
+                     path_to_plots,
+                     figure_name = "corre_matrix_plot.pdf",
+                     max_points = 10_000,
+                     show_labels = True,
+                     show = False,
+                     save = True
+                    ) -> None:
+    """
+    """
+    try:
+        tf.random.set_seed(0)   
+        np.random.seed(0)
+        samp = dist.sample(max_points).numpy()
+    except:
+        samp = dist
+    shape = samp.shape
+    labels = []
+    for i in range(1,shape[1]+1):
+        labels.append(r"$\mathbf{x}_{%d}$" % i)
+        i = i+1
+    #df: pd.DataFrame = pd.DataFrame(samp, columns=labels)
+    #f: plt.Figure = plt.figure(figsize=(18, 18))
+    #plt.matshow(df.corr(), fignum=f.number)
+    #cb = plt.colorbar()
+    #plt.grid(False)
 
+    df = pd.DataFrame(samp, columns=labels)
+
+    # Create figure and plot correlation matrix
+    fig, ax = plt.subplots(figsize=(10, 10))
+    cax = ax.matshow(df.corr(), interpolation='nearest')
+    fig.colorbar(cax)
+
+    # Set axis labels
+    ax.set_xticks(range(len(labels)))
+    ax.set_yticks(range(len(labels)))
+    ax.xaxis.set_ticks_position('bottom')
+    ax.yaxis.set_ticks_position('left')
+    if show_labels:
+        ax.set_xticklabels(labels)
+        ax.set_yticklabels(labels, rotation=90)
+    else:
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+
+    # Turn off the grid
+    ax.grid(False)
     
+    if save:
+        figure_path = os.path.join(path_to_plots,figure_name)
+        _, file_extension = os.path.splitext(figure_name)
+        save_kwargs = {}
+        if file_extension.lower() in ['.jpg', '.jpeg', '.png']:
+            save_kwargs['pil_kwargs'] = {'quality': 50}
+        plt.savefig(figure_path, **save_kwargs)
+    if show:
+        plt.show()
+    plt.close(fig)
+    
+    return

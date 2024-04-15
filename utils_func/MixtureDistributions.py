@@ -9,6 +9,31 @@ import numpy as np
 import random
 from typing import List, Tuple, Dict, Callable, Union, Optional
 
+def MultiNormalFromMixtureGaussian(ncomp: int,
+                                   ndims: int,
+                                   eps_loc: float = 0.,
+                                   eps_scale: float = 0.,
+                                   seed: int = 0,
+                                   nsamples: int = 50_000
+                                  ) -> tfp.distributions.MultivariateNormalTriL: 
+    reset_random_seeds(seed)
+    loc: np.ndarray = np.random.sample(ndims) * 10
+    loc_eps_np: np.ndarray = np.random.uniform(loc - eps_loc, loc + eps_loc)
+    loc_eps: tf.Tensor = tf.constant(loc_eps_np, dtype = tf.float32)
+    mix = MixtureGaussian(ncomp = ncomp,
+                          ndims = ndims,
+                          eps_loc = eps_loc,
+                          eps_scale = eps_scale,
+                          seed = seed)
+    samp = mix.sample(nsamples).numpy()
+    df = pd.DataFrame(samp)
+    correlation_matrix_np: np.ndarray = df.corr().to_numpy()
+    correlation_matrix: tf.Tensor = tf.constant(correlation_matrix_np * eps_scale, dtype = tf.float32)
+    scale_eps: tf.Tensor = tf.linalg.cholesky(correlation_matrix) # type: ignore
+    mvn = tfp.distributions.MultivariateNormalTriL(loc = loc_eps, 
+                                                   scale_tril = scale_eps)
+    return mvn
+
 def MixtureGaussian(ncomp: int,
                     ndims: int,
                     eps_loc: float = 0.,
@@ -368,6 +393,50 @@ def MixMultiNormal2_indep(n_components: int = 3,
         reinterpreted_batch_ndims = 0)
     return mix_gauss
 
+#def generate_random_correlation_matrix(n, seed=0):
+#    reset_random_seeds(seed)  
+#    A = np.random.randn(n, n)
+#    A = (A + A.T) / 2
+#    A = np.dot(A, A.T)
+#    D = np.sqrt(np.diag(1 / np.diag(A)))
+#    correlation_matrix = np.dot(D, np.dot(A, D))
+#    return correlation_matrix
+
+#def generate_random_correlation_matrix(n, seed=0):
+#    if seed is not None:
+#        np.random.seed(seed)
+#    A = np.random.normal(size=(n, n))
+#    B = np.dot(A, A.T)
+#    D = np.sqrt(np.diag(B))
+#    correlation_matrix = B / np.outer(D, D)
+#    return correlation_matrix
+
+def generate_random_correlation_matrix(n, 
+                                       seed = 0,
+                                       n_samples = 50_000):
+    reset_random_seeds(seed)
+    mix = MixtureGaussian(3, n, 0., 0., seed)
+    samp = mix.sample(n_samples).numpy()
+    df = pd.DataFrame(samp)
+    corr = df.corr().to_numpy()
+    return corr
+
+def MultiNormal1(n_dimensions: int = 4,
+                 eps_loc: float = 0.,
+                 eps_scale: float = 0.,
+                 seed: int = 0
+                ) -> tfp.distributions.MultivariateNormalTriL:
+    reset_random_seeds(seed)
+    loc: np.ndarray = np.random.sample(n_dimensions) * 10
+    loc_eps_np: np.ndarray = np.random.uniform(loc - eps_loc, loc + eps_loc)
+    loc_eps: tf.Tensor = tf.constant(loc_eps_np, dtype = tf.float32)
+    correlation_matrix_np: np.ndarray = generate_random_correlation_matrix(n_dimensions, seed = seed)
+    correlation_matrix: tf.Tensor = tf.constant(correlation_matrix_np * eps_scale, dtype = tf.float32)
+    scale_eps: tf.Tensor = tf.linalg.cholesky(correlation_matrix) # type: ignore
+    mvn = tfp.distributions.MultivariateNormalTriL(loc = loc_eps, 
+                                                   scale_tril = scale_eps)
+    return mvn
+
 def describe_distributions(distributions: List[tfp.distributions.Distribution]) -> None:
     """
     Describes a 'tfp.distributions' object.
@@ -502,21 +571,3 @@ def RandCov(std: np.ndarray,
     D: np.ndarray = np.diag(std)
     V: np.ndarray = np.matmul(np.matmul(D,corr),D)
     return V
-
-def plot_corr_matrix(X: np.ndarray) -> None:
-    """
-    Plots the correlation matrix of the data 'X'.
-    
-    Args:
-        X: np.ndarray, data to plot the correlation matrix of
-
-    Returns:
-        None (plots the correlation matrix)
-    """
-    df: pd.DataFrame = pd.DataFrame(X)
-    f: plt.Figure = plt.figure(figsize=(18, 18))
-    plt.matshow(df.corr(), fignum=f.number)
-    cb = plt.colorbar()
-    plt.grid(False)
-    plt.show()
-    plt.close()
