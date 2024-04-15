@@ -3,7 +3,6 @@ from .fpd_metrics import FPDMetric
 from .kpd_metrics import KPDMetric
 from .ks_metrics import KSTest
 from .lr_metrics import LRMetric
-from .multiks_metrics import MultiKSTest
 from .sks_metrics import SKSTest
 from .swd_metrics import SWDMetric
 from .base import TwoSampleTestBase
