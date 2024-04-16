@@ -14,12 +14,13 @@ def MultiNormalFromMixtureGaussian(ncomp: int,
                                    eps_loc: float = 0.,
                                    eps_scale: float = 0.,
                                    seed: int = 0,
+                                   scale_def: Optional[str] = None, # could be None, std, cov, off
                                    nsamples: int = 50_000
                                   ) -> tfp.distributions.MultivariateNormalTriL: 
     reset_random_seeds(seed)
     loc: np.ndarray = np.random.sample(ndims) * 10
     loc_eps_np: np.ndarray = np.random.uniform(loc - eps_loc, loc + eps_loc)
-    loc_eps: tf.Tensor = tf.constant(loc_eps_np, dtype = tf.float32)
+    loc_eps: tf.Tensor = tf.constant(loc_eps_np, dtype = tf.float64)
     mix = MixtureGaussian(ncomp = ncomp,
                           ndims = ndims,
                           eps_loc = eps_loc,
@@ -28,8 +29,33 @@ def MultiNormalFromMixtureGaussian(ncomp: int,
     samp = mix.sample(nsamples).numpy()
     df = pd.DataFrame(samp)
     correlation_matrix_np: np.ndarray = df.corr().to_numpy()
-    correlation_matrix: tf.Tensor = tf.constant(correlation_matrix_np * eps_scale, dtype = tf.float32)
-    scale_eps: tf.Tensor = tf.linalg.cholesky(correlation_matrix) # type: ignore
+    if scale_def is not None:
+        for i in range(ndims):
+            for j in range(ndims):
+                if i == j:
+                    correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
+                    #if scale_def == "std":
+                    #    correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
+                    #elif scale_def == "cov":
+                    #    correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
+                    #elif scale_def == "off":
+                    #    correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
+                    #else:
+                    #    raise Exception("scale_def should be 'None', 'std', 'cov', or 'off'.")
+                else:
+                    if scale_def == "std":
+                        correlation_matrix_np[i,j] = correlation_matrix_np[i,j]
+                    elif scale_def == "cov":
+                        correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
+                    elif scale_def == "off":
+                        correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * np.max([0.,(1 - eps_scale)])
+                    else:
+                        raise Exception("scale_def should be 'None', 'std', 'cov', or 'off'.")
+    #print(f"correlation matrix: {correlation_matrix_np}")
+    if not np.all(np.linalg.eigvals(correlation_matrix_np) >= 0):
+        raise ValueError("The correlation matrix is not semi positive-definite.")
+    covariance_matrix: tf.Tensor = tf.constant(correlation_matrix_np, dtype = tf.float64)
+    scale_eps: tf.Tensor = tf.linalg.cholesky(covariance_matrix) # type: ignore
     mvn = tfp.distributions.MultivariateNormalTriL(loc = loc_eps, 
                                                    scale_tril = scale_eps)
     return mvn
