@@ -253,7 +253,7 @@ def compute_exclusion_LR_bisection(metric_config: Dict[str,Any],
                                    test_kwargs: Dict[str,Any],
                                    model_dir: str,
                                    cl_list = [0.95, 0.99],
-                                   deformation: str = "mean", # could be mean, std, or both
+                                   deformation: str = "mean", # could be mean, std, off, cov, mean_std, mean_off, mean_cov
                                    seed_dist: int = 0,
                                    x_tol: float = 0.01,
                                    fn_tol: float = 0.01,
