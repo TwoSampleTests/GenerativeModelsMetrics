@@ -33,15 +33,14 @@ def MultiNormalFromMixtureGaussian(ncomp: int,
         for i in range(ndims):
             for j in range(ndims):
                 if i == j:
-                    correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
-                    #if scale_def == "std":
-                    #    correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
-                    #elif scale_def == "cov":
-                    #    correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
-                    #elif scale_def == "off":
-                    #    correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
-                    #else:
-                    #    raise Exception("scale_def should be 'None', 'std', 'cov', or 'off'.")
+                    if scale_def == "std":
+                        correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
+                    elif scale_def == "cov":
+                        correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * (1 + eps_scale)
+                    elif scale_def == "off":
+                        correlation_matrix_np[i,j] = correlation_matrix_np[i,j] * np.max([1., eps_scale])
+                    else:
+                        raise Exception("scale_def should be 'None', 'std', 'cov', or 'off'.")
                 else:
                     if scale_def == "std":
                         correlation_matrix_np[i,j] = correlation_matrix_np[i,j]
