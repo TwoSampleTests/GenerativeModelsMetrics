@@ -114,7 +114,7 @@ def fpd_tf(data1_input: DataType,
            max_samples_input: Optional[int] = None,
            num_batches: int = 20, 
            num_points: int = 10,
-           normalise: bool = True,
+           normalise: bool = False,
            seed: int = 0
           ) -> Tuple[DataTypeTF, tf.Tensor]:
     data1: DataTypeTF

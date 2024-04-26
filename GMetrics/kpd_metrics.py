@@ -101,7 +101,7 @@ def kpd_tf(X: tf.Tensor,
            block_size: int = 10_000,
            num_batches: int = 1,
            batch_size: int = 10_000,
-           normalise: bool = True,
+           normalise: bool = False,
            seed: int = 42):
     if normalise:
         X, Y = _normalise_features_tf(X, Y) # type: ignore
