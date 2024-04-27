@@ -526,8 +526,9 @@ def generate_and_clean_data(dist: tfp.distributions.Distribution,
                             seed_generator: tf.random.Generator,
                             strategy: Optional[tf.distribute.Strategy] = None
                             ) -> tf.Tensor:
-    if batch_size > n_samples:
-        batch_size = n_samples
+    batch_size = tf.cond(tf.less(batch_size, n_samples), lambda: batch_size, lambda: n_samples)
+    #if batch_size > n_samples:
+    #    batch_size = n_samples
         #print("Warning: batch_size > n_samples. Setting batch_size = n_samples and proceeding.")
     #gpu_devices = tf.config.experimental.list_physical_devices('GPU')
     if strategy:

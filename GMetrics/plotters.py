@@ -1,4 +1,3 @@
-
 import os
 import numpy as np
 import pandas as pd
@@ -66,6 +65,8 @@ def cornerplotter(dist_1,
                   max_points = 50_000,
                   max_dim = 32, 
                   n_bins = 50,
+                  title = None,
+                  corner_kwargs = {},
                   show = False,
                   save = True
                  ) -> None:
@@ -110,15 +111,18 @@ def cornerplotter(dist_1,
                            color = 'red',
                            bins = n_bins,
                            labels = [r"%s" % s for s in labels],
-                           normalize1d = True)
+                           normalize1d = True,
+                           **corner_kwargs)
     corner.corner(samp_2,
                   color = 'blue',
                   bins = n_bins,
                   fig = figure, 
                   normalize1d = True)
     plt.legend(handles = [red_line, blue_line], 
-               bbox_to_anchor = (-ndims_eff+1.8, ndims_eff+.3, 1., 0.) ,
+               bbox_to_anchor = (-ndims_eff+1.8, ndims_eff+.3, ndims_eff-1, 0.) ,
                fontsize='xx-large')
+    if title:
+        figure.suptitle(title, fontsize=20)
     if save:
         figure_path = os.path.join(path_to_plots,figure_name)
         _, file_extension = os.path.splitext(figure_name)
@@ -132,79 +136,48 @@ def cornerplotter(dist_1,
     return
 
 def marginal_plot(target_test_data,sample_nf,path_to_plots,ndims):
-
- 
     n_bins=50
-
-    
-
     if ndims<=4:
-    
         fig, axs = plt.subplots(int(ndims/4), 4, tight_layout=True)
-    
         for dim in range(ndims):
-    
-  
             column=int(dim%4)
-
             axs[column].hist(target_test_data[:,dim], bins=n_bins,density=True,histtype='step',color='red')
             axs[column].hist(sample_nf[:,dim], bins=n_bins,density=True,histtype='step',color='blue')
-        
-        
             x_axis = axs[column].axes.get_xaxis()
             x_axis.set_visible(False)
             y_axis = axs[column].axes.get_yaxis()
             y_axis.set_visible(False)
-    
-    
-    
-
     elif ndims>=100:
-    
         fig, axs = plt.subplots(int(ndims/10), 10, tight_layout=True)
-    
         for dim in range(ndims):
-    
-  
             row=int(dim/10)
             column=int(dim%10)
-
             axs[row,column].hist(target_test_data[:,dim], bins=n_bins,density=True,histtype='step',color='red')
             axs[row,column].hist(sample_nf[:,dim], bins=n_bins,density=True,histtype='step',color='blue')
-        
-        
             x_axis = axs[row,column].axes.get_xaxis()
             x_axis.set_visible(False)
             y_axis = axs[row,column].axes.get_yaxis()
             y_axis.set_visible(False)
-
     else:
-        
-        
         fig, axs = plt.subplots(int(ndims/4), 4, tight_layout=True)
         for dim in range(ndims):
-    
             row=int(dim/4)
             column=int(dim%4)
-
             axs[row,column].hist(target_test_data[:,dim], bins=n_bins,density=True,histtype='step',color='red')
             axs[row,column].hist(sample_nf[:,dim], bins=n_bins,density=True,histtype='step',color='blue')
-        
-        
             x_axis = axs[row,column].axes.get_xaxis()
             x_axis.set_visible(False)
             y_axis = axs[row,column].axes.get_yaxis()
             y_axis.set_visible(False)
-        
     fig.savefig(path_to_plots+'/marginal_plot.pdf',dpi=300)
     fig.clf()
-
     return
    
 def plot_corr_matrix(dist: np.ndarray,
                      path_to_plots,
                      figure_name = "corre_matrix_plot.pdf",
                      max_points = 10_000,
+                     title = None,
                      show_labels = True,
                      show = False,
                      save = True
@@ -250,6 +223,9 @@ def plot_corr_matrix(dist: np.ndarray,
     # Turn off the grid
     ax.grid(False)
     
+    if title:
+        fig.suptitle(title, fontsize=20)
+    
     if save:
         figure_path = os.path.join(path_to_plots,figure_name)
         _, file_extension = os.path.splitext(figure_name)
@@ -259,6 +235,89 @@ def plot_corr_matrix(dist: np.ndarray,
         plt.savefig(figure_path, **save_kwargs)
     if show:
         plt.show()
-    plt.close(fig)
+    return
+
+def plot_corr_matrix_side_by_side(dist_1: tfp.distributions.Distribution,
+                                  dist_2: tfp.distributions.Distribution,
+                                  path_to_plots,
+                                  figure_name="corre_matrix_plot_side_by_side.pdf",
+                                  max_points=10_000,
+                                  title = None,
+                                  show_labels=True,
+                                  show=False,
+                                  save=False) -> None:
+    """
+    Plots two correlation matrices side by side with a single colorbar in the middle.
+
+    Parameters:
+    - dist_1, dist_2: Distributions from which samples are drawn to compute the correlation matrices.
+    - path_to_plots: Directory path to save the figure.
+    - figure_name: Name of the file to save the figure.
+    - max_points: Maximum number of points to sample from each distribution.
+    - show_labels: Whether to show labels on the axes.
+    - show: Whether to display the plot.
+    - save: Whether to save the plot to a file.
+    """
+    try:
+        tf.random.set_seed(0)
+        np.random.seed(0)
+        samp_1 = dist_1.sample(max_points).numpy()
+    except:
+        samp_1 = dist_1
+    try:
+        samp_2 = dist_2.sample(max_points).numpy()
+    except:
+        samp_2 = dist_2
+    labels = [r"$\mathbf{x}_{%d}$" % i for i in range(1, samp_1.shape[1] + 1)]
+
+    # Create DataFrames
+    df1 = pd.DataFrame(samp_1, columns=labels)
+    df2 = pd.DataFrame(samp_2, columns=labels)
+
+    # Create figure and axes for subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10), gridspec_kw={'width_ratios': [1, 1], 'wspace': 0.2})
+
+    # Plot correlation matrices
+    cax1 = ax1.matshow(df1.corr(), interpolation='nearest')
+    cax2 = ax2.matshow(df2.corr(), interpolation='nearest')
+
+    # Set axis labels
+    for ax in (ax1, ax2):
+        ax.set_xticks(range(len(labels)))
+        ax.set_yticks(range(len(labels)))
+        ax.xaxis.set_ticks_position('bottom')
+        ax.yaxis.set_ticks_position('left')
+        if show_labels:
+            ax.set_xticklabels(labels)
+            ax.set_yticklabels(labels, rotation=90)
+        else:
+            ax.set_xticklabels([])
+            ax.set_yticklabels([])
+
+    # Disable grid
+    ax1.grid(False)
+    ax2.grid(False)
+
+    # Add one colorbar in the middle
+    fig.subplots_adjust(right=0.8)
+    cbar_ax = fig.add_axes([0.85, 0.15, 0.05, 0.7])  # Adjust these values to move and resize the colorbar
+    fig.colorbar(cax1, cax=cbar_ax)
     
+    if title:
+        fig.suptitle(title, fontsize=20)
+
+    # Saving the figure
+    if save:
+        figure_path = os.path.join(path_to_plots, figure_name)
+        _, file_extension = os.path.splitext(figure_name)
+        save_kwargs = {}
+        if file_extension.lower() in ['.jpg', '.jpeg', '.png']:
+            save_kwargs['pil_kwargs'] = {'quality': 50}
+        plt.savefig(figure_path, **save_kwargs)
+
+    # Show plot if requested
+    if show:
+        plt.show()
+
+    plt.close()
     return
