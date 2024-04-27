@@ -96,11 +96,13 @@ def compute_exclusion_bisection(reference_distribution: tfp.distributions.Distri
         if deformation in ["mean", "cov_diag", "cov_off_diag"]:
             deform_kwargs = {"eps": eps, "deform_type": deformation, "seed": seed_dist}
         elif "power_abs" in deformation:
+            deform_type = "power_abs"
             direction = deformation.split("_")[-1]
-            deform_kwargs = {"eps": eps, "deform_type": deformation, "direction": direction}
+            deform_kwargs = {"eps": eps, "deform_type": deform_type, "direction": direction}
         elif "random" in deformation:
+            deform_type = "random"
             shift_dist = deformation.split("_")[-1]
-            deform_kwargs = {"eps": eps, "deform_type": deformation, "shift_dist": shift_dist, "seed": seed_dist}
+            deform_kwargs = {"eps": eps, "deform_type": deform_type, "shift_dist": shift_dist, "seed": seed_dist}
         else:
             raise ValueError(f"Invalid value for deformation: {deformation}")
         
@@ -272,11 +274,13 @@ def compute_exclusion_LR_bisection(reference_distribution: tfp.distributions.Dis
         if deformation in ["mean", "cov_diag", "cov_off_diag"]:
             deform_kwargs = {"eps": eps, "deform_type": deformation, "seed": seed_dist}
         elif "power_abs" in deformation:
+            deform_type = "power_abs"
             direction = deformation.split("_")[-1]
-            deform_kwargs = {"eps": eps, "deform_type": deformation, "direction": direction}
+            deform_kwargs = {"eps": eps, "deform_type": deform_type, "direction": direction}
         elif "random" in deformation:
+            deform_type = "random"
             shift_dist = deformation.split("_")[-1]
-            deform_kwargs = {"eps": eps, "deform_type": deformation, "shift_dist": shift_dist, "seed": seed_dist}
+            deform_kwargs = {"eps": eps, "deform_type": deform_type, "shift_dist": shift_dist, "seed": seed_dist}
         else:
             raise ValueError(f"Invalid value for deformation: {deformation}")
             
@@ -353,6 +357,9 @@ def compute_exclusion_LR_bisection(reference_distribution: tfp.distributions.Dis
             start = timer() # Reset the timer
             iteration = 0
             eps_min, eps_max = eps, eps_max_start # Initialize the bounds
+            
+        if iteration == max_iterations - 1:
+            exclusion_list.append([metric_thresholds[metric_threshold_number][0], metric_name, None, None, end - start])
             
     end = timer()
     if verbose:
