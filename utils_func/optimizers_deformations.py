@@ -154,6 +154,10 @@ def compute_exclusion_bisection(reference_distribution: tfp.distributions.Distri
             start = timer() # Reset the timer
             iteration = 0
             eps_min, eps_max = eps, eps_max_start # Initialize the bounds
+            
+        if iteration == max_iterations - 1:
+            end = timer()
+            exclusion_list.append([metric_thresholds[metric_threshold_number][0], metric_name, None, None, end - start])
         
     end = timer()
     if verbose:
@@ -284,7 +288,7 @@ def compute_exclusion_LR_bisection(reference_distribution: tfp.distributions.Dis
         else:
             raise ValueError(f"Invalid value for deformation: {deformation}")
             
-        print(f"\n------------ {iteration} - {metric_thresholds[metric_threshold_number][0]} CL ------------")
+        print(f"\n------------ {iteration} - {cl_list[metric_threshold_number]} CL ------------")
         print(f"eps = {eps} - deformation = {deformation}")
 
         print(f"Computing null distribution")
@@ -359,6 +363,7 @@ def compute_exclusion_LR_bisection(reference_distribution: tfp.distributions.Dis
             eps_min, eps_max = eps, eps_max_start # Initialize the bounds
             
         if iteration == max_iterations - 1:
+            end = timer()
             exclusion_list.append([metric_thresholds[metric_threshold_number][0], metric_name, None, None, end - start])
             
     end = timer()

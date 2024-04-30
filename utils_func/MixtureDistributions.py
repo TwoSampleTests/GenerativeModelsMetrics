@@ -159,15 +159,18 @@ class AbsPowerTransform(tfb.Bijector):
 
     def _forward(self, x):
         # Apply power transformation only to the absolute value and keep the sign
-        return tf.sign(x) * tf.pow(tf.abs(x), self.power)
+        power = tf.cast(self.power, x.dtype)
+        return tf.sign(x) * tf.pow(tf.abs(x), power)
 
     def _inverse(self, y):
         # Inverse transformation, assuming y has the same sign as x
-        return tf.sign(y) * tf.pow(tf.abs(y), 1. / self.power)
+        power = tf.cast(self.power, y.dtype)
+        return tf.sign(y) * tf.pow(tf.abs(y), tf.cast(1., y.dtype) / power) # type: ignore
 
     def _forward_log_det_jacobian(self, x):
         # Logarithm of the absolute value of the derivative of the forward transformation
-        return (self.power - 1) * tf.math.log(tf.abs(x)) + tf.math.log(tf.abs(self.power))
+        power = tf.cast(self.power, x.dtype)
+        return (power - tf.cast(1.,x.dtype)) * tf.math.log(tf.abs(x)) + tf.math.log(tf.abs(power)) # type: ignore
     
 def deform_power_abs(distribution,
                      eps = 0.,

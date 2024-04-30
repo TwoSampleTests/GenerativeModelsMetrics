@@ -95,7 +95,7 @@ def _normalise_features_tf(data1_input: DataType,
 
 @tf.function(jit_compile=True)
 def generate_unique_indices(num_samples, batch_size, num_batches, seed = None):
-    #reset_random_seeds(seed)
+    reset_random_seeds(seed)
     # Edge case: if num_samples equals batch_size, shuffle uniquely for each batch
     if num_samples == batch_size:
         # Create a large tensor that repeats the range [0, num_samples] num_batches times
@@ -145,8 +145,8 @@ def fgd_tf(X: tf.Tensor,
     total_batches: int = num_points * num_batches
     #all_rand1: tf.Tensor = tf.random.uniform(shape=[total_batches, max_batch_size], minval=0, maxval=tf.shape(X)[0], dtype=tf.int32, seed=seed)
     #all_rand2: tf.Tensor = tf.random.uniform(shape=[total_batches, max_batch_size], minval=0, maxval=tf.shape(Y)[0], dtype=tf.int32, seed=seed)
-    all_rand1: tf.Tensor = generate_unique_indices(nsamplesX, max_batch_size, total_batches, seed) # type: ignore
-    all_rand2: tf.Tensor = generate_unique_indices(nsamplesY, max_batch_size, total_batches, (seed + 100) * 1000) # type: ignore
+    #all_rand1: tf.Tensor = generate_unique_indices(nsamplesX, max_batch_size, total_batches, seed) # type: ignore
+    #all_rand2: tf.Tensor = generate_unique_indices(nsamplesY, max_batch_size, total_batches, (seed + 10000) * 1000) # type: ignore
     batches: tf.Tensor = tf.cast(1 / tf.linspace(1.0 / min_samples, 1.0 / max_samples, num_points), dtype=tf.int32) # type: ignore
         
     vals = tf.TensorArray(dtype, size=num_points, clear_after_read=False)
@@ -155,10 +155,12 @@ def fgd_tf(X: tf.Tensor,
         val_points: tf.TensorArray = tf.TensorArray(dtype, size=num_batches)
         def body_inner(j, val_points):
             start_index: tf.Tensor = i * num_batches + j
-            rand1: tf.Tensor = all_rand1[start_index, :batch_size] # type: ignore
-            rand2: tf.Tensor = all_rand2[start_index, :batch_size] # type: ignore
-            rand_sample1: tf.Tensor = tf.gather(X, rand1)
-            rand_sample2: tf.Tensor = tf.gather(Y, rand2)
+            #rand1: tf.Tensor = all_rand1[start_index, :batch_size] # type: ignore
+            #rand2: tf.Tensor = all_rand2[start_index, :batch_size] # type: ignore
+            #rand_sample1: tf.Tensor = tf.gather(X, rand1)
+            #rand_sample2: tf.Tensor = tf.gather(Y, rand2)
+            rand_sample1: tf.Tensor = tf.random.shuffle(X)[:batch_size]
+            rand_sample2: tf.Tensor = tf.random.shuffle(Y)[:batch_size]
             mu1: tf.Tensor = tf.reduce_mean(rand_sample1, axis=0)
             mu2: tf.Tensor = tf.reduce_mean(rand_sample2, axis=0)
             sigma1: tf.Tensor = tfp.stats.covariance(rand_sample1, sample_axis=0, event_axis=-1)
@@ -180,6 +182,27 @@ def fgd_tf(X: tf.Tensor,
         loop_vars=(0, vals)
     )
     vals_stacked: DataTypeTF = vals.stack()
+    
+    #vals: tf.TensorArray = tf.TensorArray(dtype = X.dtype, size = num_points)
+    #counter: int = 0
+    #for i in tf.range(tf.shape(batches)[0]):
+    #    batch_size: int = batches[i]
+    #    val_points: tf.TensorArray = tf.TensorArray(dtype = X.dtype, size = num_batches)
+    #    for j in tf.range(num_batches):
+    #        rand1: tf.Tensor = all_rand1[counter, :batch_size]
+    #        rand2: tf.Tensor = all_rand2[counter, :batch_size]
+    #        counter += 1
+    #        rand_sample1: tf.Tensor = tf.gather(X, rand1)
+    #        rand_sample2: tf.Tensor = tf.gather(Y, rand2)
+    #        mu1: tf.Tensor = tf.reduce_mean(rand_sample1, axis=0)
+    #        mu2: tf.Tensor = tf.reduce_mean(rand_sample2, axis=0)
+    #        sigma1: tf.Tensor = tfp.stats.covariance(rand_sample1, sample_axis=0, event_axis=-1)
+    #        sigma2: tf.Tensor = tfp.stats.covariance(rand_sample2, sample_axis=0, event_axis=-1)
+    #        val: tf.Tensor = _calculate_frechet_distance_tf(mu1, sigma1, mu2, sigma2) # type: ignore
+    #        val_points = val_points.write(j, val)
+    #    val_points = val_points.stack()
+    #    vals = vals.write(i, tf.reduce_mean(val_points))
+    #vals_stacked: DataTypeTF = vals.stack()
     
     return vals_stacked, batches
 
