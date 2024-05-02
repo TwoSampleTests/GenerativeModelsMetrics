@@ -34,6 +34,7 @@ def MixMultiNormal(ncomp: int = 3,
                                           minval = 0, 
                                           maxval = 1, 
                                           dtype = dtype)
+    probs = probs / tf.reduce_sum(probs)
     components: List[tfp.distributions.MultivariateNormalDiag] = []
     for i in range(ncomp):
         components.append(tfp.distributions.MultivariateNormalDiag(loc = loc[i], scale_diag = scale[i]))
@@ -143,7 +144,10 @@ def deform_cov_off_diag(distribution,
         modified_covariance = modified_covariance = modify_covariance_matrix(original_covariance, eps)
         chol_original = tf.linalg.cholesky(original_covariance)
         chol_modified = tf.linalg.cholesky(modified_covariance)
-        transformation_matrix = tf.linalg.triangular_solve(chol_original, chol_modified)
+        transformation_matrix_transpose = tf.linalg.triangular_solve(tf.linalg.matrix_transpose(chol_original), 
+                                                                     tf.linalg.matrix_transpose(chol_modified),
+                                                                     lower=False)
+        transformation_matrix = tf.linalg.matrix_transpose(transformation_matrix_transpose)
         original_mean = distribution.mean()
         shift_to_zero = tfb.Shift(-original_mean)
         linear_transform = tfb.ScaleMatvecTriL(scale_tril=transformation_matrix)
