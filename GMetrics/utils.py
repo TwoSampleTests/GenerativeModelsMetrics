@@ -24,12 +24,15 @@ __all__ = [
     'save_update_LR_metrics_config'
 ]
 import os
+import sys
 import inspect
 import numpy as np
 import pandas as pd
+from scipy import stats
 import random
 import json
 from scipy.stats import moment # type: ignore
+import matplotlib.pyplot as plt
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow_probability import distributions as tfd
@@ -640,3 +643,142 @@ def save_update_LR_metrics_config(metric_config: Dict[str,Any],
     flat_list_of_dicts = [item for sublist in dict_values_list for item in sublist]
     
     return pd.DataFrame(flat_list_of_dicts)
+
+def get_CI_from_sigma(sigma):
+    return 2*stats.norm.cdf(sigma)-1
+
+def get_sigma_from_CI(CI):
+    return stats.norm.ppf(CI/2+1/2)
+
+def get_delta_chi2_from_CI(CI, dof = 1):
+    return stats.chi2.ppf(CI,dof)
+
+def sort_consecutive(data, stepsize=1):
+    return np.split(data, np.where(np.diff(data) != stepsize)[0]+1)
+
+class BlockPrints:
+    def __enter__(self):
+        self._original_stdout = sys.stdout
+        sys.stdout = open(os.devnull, 'w')
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout.close()
+        sys.stdout = self._original_stdout
+
+def HPD_intervals(data, intervals=0.68, weights=None, nbins=25, print_hist=False, reduce_binning=True):
+    intervals = np.array([intervals]).flatten()
+    if weights is None:
+        weights = np.ones(len(data))
+    weights = np.array(weights)
+    counter = 0
+    results = []
+    for interval in intervals:
+        hist = np.histogram(data, nbins, weights=weights, density=True)
+        counts, bins = hist
+        nbins_val = len(counts)
+        if print_hist:
+            integral = counts.sum()
+            plt.step(bins[:-1], counts/integral, where='post',
+                     color='green', label=r"train")
+            plt.show()
+        binwidth = bins[1]-bins[0]
+        arr0 = np.transpose(np.concatenate(
+            ([counts*binwidth], [(bins+binwidth/2)[0:-1]])))
+        arr0 = np.transpose(np.append(np.arange(nbins_val),
+                                      np.transpose(arr0)).reshape((3, nbins_val)))
+        arr = np.flip(arr0[arr0[:, 1].argsort()], axis=0)
+        q = 0
+        bin_labels = np.array([])
+        for i in range(nbins_val):
+            if q <= interval:
+                q = q + arr[i, 1]
+                bin_labels = np.append(bin_labels, arr[i, 0])
+            else:
+                bin_labels = np.sort(bin_labels)
+                result = [[arr0[tuple([int(k[0]), 2])], arr0[tuple([int(k[-1]), 2])]]
+                          for k in sort_consecutive(bin_labels)]
+                result_previous = result
+                binwidth_previous = binwidth
+                if reduce_binning:
+                    while (len(result) == 1 and nbins_val+nbins < np.sqrt(len(data))):
+                        nbins_val = nbins_val+nbins
+                        #print(nbins_val)
+                        result_previous = result
+                        binwidth_previous = binwidth
+                        nbins_val_previous = nbins_val
+                        with BlockPrints():
+                            HPD_int_val = HPD_intervals(data, intervals=interval, weights=weights, nbins=nbins_val, print_hist=False)
+                        result = HPD_int_val[0][1]
+                        binwidth = HPD_int_val[0][3]
+                        #print(binwidth)
+                break
+        results.append([interval, result_previous, nbins_val, binwidth_previous])
+        counter = counter + 1
+    return results
+
+def HPD_quotas(data, intervals=0.68, weights=None, nbins=25, from_top=True):
+    hist2D = np.histogram2d(data[:,0], data[:,1], bins=nbins, range=None, normed=None, weights=weights, density=None)
+    intervals = np.array([intervals]).flatten()
+    counts, binsX, binsY = hist2D
+    integral = counts.sum()
+    counts_sorted = np.flip(np.sort(flatten_list(counts)))
+    quotas = intervals
+    q = 0
+    j = 0
+    for i in range(len(counts_sorted)):
+        if q < intervals[j] and i<len(counts_sorted)-1:
+            q = q + counts_sorted[i]/integral
+        elif q >= intervals[j] and i<len(counts_sorted)-1:
+            if from_top:
+                quotas[j] = 1-counts_sorted[i]/counts_sorted[0]
+            else:
+                quotas[j] = counts_sorted[i]/counts_sorted[0]
+            j = j + 1
+        else:
+            for k in range(j,len(intervals)):
+                quotas[k] = 0
+            j = len(intervals)
+        if j == len(intervals):
+            return quotas
+
+def weighted_quantiles(data, quantiles, weights=None,
+                       data_sorted=False, onesided=False):
+    """ Very close to numpy.percentile, but supports weights.
+    NOTE: quantiles should be in [0, 1]!
+    :param data: numpy.array with data
+    :param quantiles: array-like with many quantiles needed
+    :param weights: array-like of the same length as `array`
+    :param data_sorted: bool, if True, then will avoid sorting of
+        initial array
+    :return: numpy.array with computed quantiles.
+    """
+    if onesided:
+        data = np.array(data[data > 0])
+    else:
+        data = np.array(data)
+    quantiles = np.array([quantiles]).flatten()
+    if weights is None:
+        weights = np.ones(len(data))
+    weights = np.array(weights)
+    assert np.all(quantiles >= 0) and np.all(quantiles <= 1), \
+        'quantiles should be in [0, 1]'
+
+    if not data_sorted:
+        sorter = np.argsort(data)
+        data = data[sorter]
+        weights = weights[sorter]
+
+    w_quantiles = np.cumsum(weights) - 0.5 * weights
+    w_quantiles -= w_quantiles[0]
+    w_quantiles /= w_quantiles[-1]
+    result = np.transpose(np.concatenate((quantiles, np.interp(
+        quantiles, w_quantiles, data))).reshape(2, len(quantiles))).tolist()
+    return result
+
+
+def weighted_central_quantiles(data, intervals=0.68, weights=None, onesided=False):
+    intervals = np.array([intervals]).flatten()
+    if not onesided:
+        return [[i, [weighted_quantiles(data, (1-i)/2, weights), weighted_quantiles(data, 0.5, weights), weighted_quantiles(data, 1-(1-i)/2, weights)]] for i in intervals]
+    else:
+        data = data[data > 0]
+        return [[i, [weighted_quantiles(data, (1-i)/2, weights), weighted_quantiles(data, 0.5, weights), weighted_quantiles(data, 1-(1-i)/2, weights)]] for i in intervals]

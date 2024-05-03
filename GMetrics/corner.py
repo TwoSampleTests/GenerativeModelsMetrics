@@ -770,11 +770,15 @@ def get_1d_hist(i_dim, xs, nbins=25, ranges=None, weights=None, intervals=None, 
             result.append([tmp[:, 0], tmp[:, 1]])
     return result
 
-def extend_corner_range(S1,S2,ilist,percent):
+def extend_corner_range(s1,
+                        s2,
+                        ilist = None, 
+                        percent = 0):
     res = []
+    ilist = ilist if ilist is not None else range(s1.shape[1])
     for i in ilist:
-        minn = np.min([np.min(S1[:,i]),np.min(S2[:,i])])
-        maxx = np.max([np.max(S1[:,i]),np.max(S2[:,i])])
+        minn = np.min([np.min(s1[:,i]),np.min(s2[:,i])])
+        maxx = np.max([np.max(s1[:,i]),np.max(s2[:,i])])
         if minn<0:
             minn = minn*(1+percent/100)
         else:
