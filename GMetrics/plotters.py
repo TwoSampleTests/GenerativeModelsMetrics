@@ -45,7 +45,6 @@ def sample_plotter(target_test_data,nf_dist,path_to_plots):
         
         return
         
-        
 def train_plotter(t_losses,v_losses,path_to_plots,yscale='log'):
     plt.plot(t_losses,label='train')
     plt.plot(v_losses,label='validation')
