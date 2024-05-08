@@ -19,7 +19,7 @@ from .base import TwoSampleTestInputs
 from .base import TwoSampleTestSlicedBase
 from .base import TwoSampleTestResult
 from .base import TwoSampleTestResults
-from .ks_metrics import ks_2samp_tf
+from .ks import ks_2samp_tf
 
 from typing import Tuple, Union, Optional, Type, Dict, Any, List
 from .utils import DTypeType, IntTensor, FloatTensor, BoolTypeTF, BoolTypeNP, IntType, DataTypeTF, DataTypeNP, DataType, DistTypeTF, DistTypeNP, DistType, DataDistTypeNP, DataDistTypeTF, DataDistType, BoolType
