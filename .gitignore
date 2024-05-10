@@ -4,6 +4,7 @@
 *DS_Store*
 *.json
 *old*
+*/leo*
 *checkpoint*
 *GMetrics*
 *__pycache__*
