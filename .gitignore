@@ -13,3 +13,4 @@
 .sync_journal.db-wal
 .sync_journal.db-shm
 .sync_journal.db-shm2
+*notebook_launcher*
